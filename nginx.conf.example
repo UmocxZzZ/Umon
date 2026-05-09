@@ -1,0 +1,77 @@
+server
+{
+    listen 80;
+    listen 443 ssl http2;
+    server_name your-domain.com;
+    index index.html;
+    root /var/www/your-domain.com;
+
+    # ============ SSL ============
+    # ssl_certificate    /path/to/fullchain.pem;
+    # ssl_certificate_key    /path/to/privkey.pem;
+    # ssl_protocols TLSv1.1 TLSv1.2 TLSv1.3;
+    # ssl_ciphers EECDH+CHACHA20:EECDH+CHACHA20-draft:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256;
+    # ssl_prefer_server_ciphers on;
+    # ssl_session_cache shared:SSL:10m;
+    # ssl_session_timeout 10m;
+
+    # HTTP -> HTTPS redirect
+    if ($server_port !~ 443){
+        rewrite ^(/.*)$ https://$host$1 permanent;
+    }
+
+    # ============ API Reverse Proxy ============
+    # Proxies /api/* to your NeteaseCloudMusicAPI instance
+    # Solves mixed content (HTTPS page -> HTTP API)
+    # Change the upstream address to your own API server
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000/;
+        proxy_set_header Host 127.0.0.1:3000;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Frontend sends cookie via X-Umon-Cookie header (browser forbids setting Cookie header)
+        # Convert it to the real Cookie header for the API server
+        proxy_set_header Cookie $http_x_umon_cookie;
+
+        # Rewrite Set-Cookie path so browser stores cookies correctly
+        proxy_cookie_path / /api/;
+
+        # API responses can be slow for large playlists
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 30s;
+    }
+
+    # ============ SPA Fallback ============
+    # Vue Router history mode — all routes serve index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ============ Static Asset Caching ============
+    location ~ .*\.(gif|jpg|jpeg|png|bmp|swf)$
+    {
+        expires      30d;
+        error_log /dev/null;
+        access_log /dev/null;
+    }
+
+    location ~ .*\.(js|css)?$
+    {
+        expires      12h;
+        error_log /dev/null;
+        access_log /dev/null;
+    }
+
+    # ============ Security ============
+    # Block access to sensitive files
+    location ~ ^/(\.user.ini|\.htaccess|\.git|\.env|\.svn|\.project|LICENSE|README.md)
+    {
+        return 404;
+    }
+
+    access_log  /var/log/nginx/your-domain.com.access.log;
+    error_log   /var/log/nginx/your-domain.com.error.log;
+}

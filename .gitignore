@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-electron/
+release/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+.debug-cookie
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor & IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.claude/
+
+# OS generated
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project-specific
+coppernetwork.js
+CLAUDE.md
+build.md
+nginx.conf
+.webnginxconf
+
+# Electron builder cache
+*.blockmap
