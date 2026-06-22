@@ -27,6 +27,12 @@ export const usePlayerStore = defineStore('player', () => {
   // URL cache: songId → resolved URL (or null if fetch failed)
   const urlCache = new Map<number, string | null>()
 
+  // Convert CDN URL to proxy URL for CORS bypass (needed for Web Audio API)
+  function toProxyUrl(url: string): string {
+    if (!url || url.startsWith('/__audio-proxy/')) return url
+    return `/__audio-proxy/${encodeURIComponent(url)}`
+  }
+
   function prefetchUrls(songs: Song[]) {
     const MAX_PREFETCH = 30
     const CONCURRENCY = 5
@@ -95,7 +101,7 @@ export const usePlayerStore = defineStore('player', () => {
   // Synchronous play — called when URL is already cached (preserves user gesture)
   function playWithUrl(song: Song, url: string) {
     audio.pause()
-    audio.src = url
+    audio.src = toProxyUrl(url)
     audio.load()
     audio.play().catch(() => {})
     getLyric(song.id).then((l) => { lyrics.value = l })
@@ -116,7 +122,7 @@ export const usePlayerStore = defineStore('player', () => {
         urlCache.set(song.id, url)
         if (url) {
           audio.pause()
-          audio.src = url
+          audio.src = toProxyUrl(url)
           audio.load()
           audio.play().catch(() => {})
         }
@@ -276,7 +282,7 @@ export const usePlayerStore = defineStore('player', () => {
       getSongUrl(state.song.id).then((url) => {
         if (!url) return
         urlCache.set(state.song.id, url)
-        audio.src = url
+        audio.src = toProxyUrl(url)
         audio.load()
         // Seek once metadata is loaded
         const onLoaded = () => {
@@ -298,6 +304,7 @@ export const usePlayerStore = defineStore('player', () => {
   audio.volume = volume.value
 
   return {
+    audio,
     playlist,
     currentIndex,
     isPlaying,

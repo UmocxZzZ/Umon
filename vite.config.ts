@@ -33,6 +33,50 @@ function debugCookiePlugin() {
   }
 }
 
+// Audio proxy to bypass CORS restrictions for Web Audio API
+function audioProxyPlugin() {
+  return {
+    name: 'audio-proxy',
+    configureServer(server: import('vite').ViteDevServer) {
+      server.middlewares.use('/__audio-proxy', async (req, res) => {
+        const url = req.url?.slice(1) // Remove leading /
+        if (!url) {
+          res.statusCode = 400
+          res.end('Missing URL')
+          return
+        }
+        try {
+          const decodedUrl = decodeURIComponent(url)
+          const response = await fetch(decodedUrl)
+          if (!response.ok) {
+            res.statusCode = response.status
+            res.end('Fetch failed')
+            return
+          }
+          // Forward headers and add CORS
+          res.setHeader('Content-Type', response.headers.get('content-type') || 'audio/mpeg')
+          res.setHeader('Access-Control-Allow-Origin', '*')
+          res.setHeader('Accept-Ranges', 'bytes')
+          // Stream the response
+          const reader = response.body?.getReader()
+          if (reader) {
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              res.write(value)
+            }
+          }
+          res.end()
+        } catch (e) {
+          console.error('[audio-proxy] error:', e)
+          res.statusCode = 500
+          res.end('Proxy error')
+        }
+      })
+    },
+  }
+}
+
 const isElectron = process.env.ELECTRON === 'true'
 const pkg = JSON.parse(fs.readFileSync(path.resolve(fileURLToPath(new URL('.', import.meta.url)), 'package.json'), 'utf-8'))
 
@@ -48,6 +92,7 @@ export default defineConfig(({ mode }) => {
     vue(),
     tailwindcss(),
     debugCookiePlugin(),
+    audioProxyPlugin(),
     ...(isElectron
       ? [
           electron([

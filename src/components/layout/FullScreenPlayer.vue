@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ChevronDown, Loader2 } from 'lucide-vue-next'
+import { ChevronDown, Loader2, Waves } from 'lucide-vue-next'
 import { usePlayerStore } from '@/stores/player'
 import { getHotComments } from '@/lib/api'
 import { useSongNavigate } from '@/lib/navigate'
 import ArtistLinks from '@/components/ArtistLinks.vue'
+import MapScene from '@/components/visualizer/MapScene.vue'
 import type { Comment } from '@/types'
 
 const route = useRoute()
@@ -17,14 +18,19 @@ const commentsLoading = ref(false)
 const lyricsRef = ref<HTMLElement | null>(null)
 const commentsRef = ref<HTMLElement | null>(null)
 const currentPage = ref(0)
+const immersiveMode = ref(false) // true = UI hidden, blur removed, full visualization
 
 // Sync lyrics scroll to current line
 watch(
   () => player.currentLyricIndex,
   (idx) => {
     if (idx >= 0 && lyricsRef.value) {
-      const el = lyricsRef.value.children[idx] as HTMLElement
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // children[0] = top spacer, children[1] = lyrics container, children[2] = bottom spacer
+      const lyricsContainer = lyricsRef.value.children[1] as HTMLElement
+      if (lyricsContainer) {
+        const el = lyricsContainer.children[idx] as HTMLElement
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
     }
   },
 )
@@ -56,8 +62,16 @@ function onScrollableWheel(e: WheelEvent, el: HTMLElement | null) {
   e.stopPropagation()
 }
 
-// Page-level wheel: switch pages
+// Check if event target is inside lyrics area
+function isInLyricsArea(e: WheelEvent): boolean {
+  const lyricsEl = lyricsRef.value
+  if (!lyricsEl) return false
+  return lyricsEl.contains(e.target as Node)
+}
+
+// Page-level wheel: switch pages (only when not in lyrics area)
 function onWheel(e: WheelEvent) {
+  if (isInLyricsArea(e)) return
   if (e.deltaY > 30 && currentPage.value === 0) {
     currentPage.value = 1
     loadComments()
@@ -80,6 +94,7 @@ watch(
   () => player.showFullScreen,
   (show) => {
     if (show) currentPage.value = 0
+    if (!show) immersiveMode.value = false
   },
 )
 
@@ -103,21 +118,50 @@ watch(
   >
     <div
       v-if="player.showFullScreen"
-      class="fixed inset-x-0 top-0 bottom-20 z-30 bg-background flex flex-col overflow-hidden"
+      class="fixed inset-x-0 top-0 bottom-20 z-30 flex flex-col overflow-hidden bg-transparent"
       @wheel="onWheel"
     >
+      <!-- Visualizer Background Layer (always active, always clear) -->
+      <div
+        class="absolute inset-0 z-0 overflow-hidden"
+        @click="immersiveMode = false"
+      >
+        <MapScene :active="true" />
+      </div>
+
+      <!-- Background + Dim overlay (covers visualizer when not in immersive mode) -->
+      <div
+        class="absolute inset-0 z-[1] transition-opacity duration-700 pointer-events-none bg-background/80"
+        :class="immersiveMode ? 'opacity-0' : 'opacity-100'"
+      />
+
       <!-- Header -->
-      <div class="flex items-center px-6 py-4 shrink-0">
+      <div
+        class="flex items-center px-6 py-4 shrink-0 absolute top-0 left-0 right-0 z-20 transition-opacity duration-500"
+        :class="immersiveMode ? 'opacity-0 pointer-events-none' : 'opacity-100'"
+      >
         <button
           class="p-2 rounded-full hover:bg-accent transition-colors"
           @click="player.toggleFullScreen"
         >
           <ChevronDown :size="24" />
         </button>
+        <div class="flex-1" />
+        <button
+          class="p-2 rounded-full transition-all duration-300 hover:bg-accent text-muted-foreground hover:text-foreground"
+          @click="immersiveMode = true"
+        >
+          <Waves :size="20" />
+        </button>
       </div>
 
       <!-- Pages: absolute stacking, each page fills the container -->
-      <div class="flex-1 relative overflow-hidden">
+      <div
+        class="flex-1 relative overflow-hidden transition-all duration-700 ease-out z-10"
+        :class="immersiveMode
+          ? 'opacity-0 pointer-events-none'
+          : 'opacity-100'"
+      >
         <!-- Page 1 -->
         <div
           class="absolute inset-0 flex transition-transform duration-500 ease-out"
@@ -164,26 +208,30 @@ watch(
             </div>
           </div>
 
-          <!-- Right: Lyrics -->
-          <div class="flex-1 overflow-hidden">
+          <!-- Right: Lyrics (independent scrollable container) -->
+          <div class="flex-1 relative">
             <div
               v-if="player.lyrics.length > 0"
               ref="lyricsRef"
-              class="h-full overflow-y-auto px-12 py-8 space-y-4"
-              @wheel="onScrollableWheel($event, lyricsRef)"
+              class="absolute inset-0 overflow-y-auto px-12"
+              style="overscroll-behavior: contain;"
             >
-              <p
-                v-for="(line, i) in player.lyrics"
-                :key="i"
-                class="text-lg transition-all duration-300 cursor-pointer"
-                :class="i === player.currentLyricIndex
-                  ? 'text-foreground font-semibold scale-105'
-                  : 'text-muted-foreground hover:text-foreground'"
-              >
-                {{ line.text }}
-              </p>
+              <div style="height: 45vh;"></div>
+              <div class="space-y-4">
+                <p
+                  v-for="(line, i) in player.lyrics"
+                  :key="i"
+                  class="text-lg transition-all duration-300 cursor-pointer"
+                  :class="i === player.currentLyricIndex
+                    ? 'text-foreground font-semibold scale-105'
+                    : 'text-muted-foreground hover:text-foreground'"
+                >
+                  {{ line.text }}
+                </p>
+              </div>
+              <div style="height: 80vh;"></div>
             </div>
-            <div v-else class="h-full flex items-center justify-center text-muted-foreground">
+            <div v-else class="absolute inset-0 flex items-center justify-center text-muted-foreground">
               <p class="text-sm">暂无歌词，滚轮切换到评论页</p>
             </div>
           </div>
