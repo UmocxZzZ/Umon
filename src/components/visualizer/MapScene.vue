@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, shallowRef, watch } from 'vue'
+import { ref, onMounted, onUnmounted, shallowRef } from 'vue'
 import * as THREE from 'three'
 import { createMapShaderMaterial, type RippleData } from './shaderMaterial'
 import { useAudioVisualizer } from '@/composables/useAudioVisualizer'
@@ -201,17 +201,6 @@ function setupScene(canvas: HTMLCanvasElement) {
   animate()
 }
 
-function handleResize() {
-  if (!canvasRef.value || !renderer.value || !camera.value) return
-  const rect = canvasRef.value.getBoundingClientRect()
-  const width = rect.width || window.innerWidth
-  const height = rect.height || window.innerHeight
-  if (width === 0 || height === 0) return
-  renderer.value.setSize(width, height)
-  camera.value.aspect = width / height
-  camera.value.updateProjectionMatrix()
-}
-
 // Click to add ripple
 function handleClick(e: MouseEvent) {
   if (!canvasRef.value) return
@@ -222,21 +211,18 @@ function handleClick(e: MouseEvent) {
   addRipple(x * 40, y * 40, 1.5)
 }
 
-// Re-initialize audio when song changes (captureStream needs reconnect)
-watch(() => player.currentSong?.id, () => {
-  if (audioInited) {
-    // Wait for new audio to start playing before reconnecting
-    const onPlaying = () => {
-      initAudio(player.audio, true)
-      player.audio.removeEventListener('playing', onPlaying)
+// Re-initialize audio when song changes (called from switchAudio after activeAudio changes)
+player.setOnAudioSwitch((newAudio) => {
+  if (!audioInited) return
+  // Wait for audio to have data before connecting visualizer
+  const tryConnect = () => {
+    if (newAudio.readyState >= 2) {
+      initAudio(newAudio, true)
+    } else {
+      newAudio.addEventListener('canplay', () => initAudio(newAudio, true), { once: true })
     }
-    player.audio.addEventListener('playing', onPlaying)
-    // Fallback: reconnect after a short delay if 'playing' doesn't fire
-    setTimeout(() => {
-      player.audio.removeEventListener('playing', onPlaying)
-      initAudio(player.audio, true)
-    }, 500)
   }
+  tryConnect()
 })
 
 onMounted(() => {

@@ -57,6 +57,11 @@ function audioProxyPlugin() {
           res.setHeader('Content-Type', response.headers.get('content-type') || 'audio/mpeg')
           res.setHeader('Access-Control-Allow-Origin', '*')
           res.setHeader('Accept-Ranges', 'bytes')
+          // Forward Content-Length and Content-Range for duration detection
+          const contentLength = response.headers.get('content-length')
+          if (contentLength) res.setHeader('Content-Length', contentLength)
+          const contentRange = response.headers.get('content-range')
+          if (contentRange) res.setHeader('Content-Range', contentRange)
           // Stream the response
           const reader = response.body?.getReader()
           if (reader) {

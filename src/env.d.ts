@@ -25,5 +25,6 @@ interface Window {
     checkUpdate: () => Promise<{ hasUpdate: boolean; latestVersion?: string; currentVersion: string }>
     setCookie: (cookieStr: string) => Promise<void>
     clearCookies: () => Promise<void>
+    getStoredCookie: () => Promise<string>
   }
 }

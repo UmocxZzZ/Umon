@@ -49,10 +49,16 @@ function startPolling() {
         stopPolling()
         if (res.cookie) {
           auth.setCookie(res.cookie)
+          // Small delay to ensure cookie is saved before fetching profile
+          await new Promise(resolve => setTimeout(resolve, 200))
           try {
             const profile = await getUserAccount(res.cookie)
-            if (profile) auth.setProfile(profile)
-          } catch {}
+            if (profile) {
+              auth.setProfile(profile)
+            }
+          } catch {
+            // Ignore error
+          }
         }
         setTimeout(() => router.push('/discover'), 800)
       } else if (res.code === 800) {

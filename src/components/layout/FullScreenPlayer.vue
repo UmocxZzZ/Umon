@@ -249,7 +249,8 @@ watch(
               :src="player.currentSong.cover"
               class="w-24 h-24 rounded-xl object-cover shadow-lg"
             />
-            <div v-else class="w-24 h-24 rounded-xl bg-muted flex items-center justify-center">
+            <div v-else class="w-24 h-24 rounded-xl bg-muted flex items-ce
+            nter justify-center">
               <span class="text-3xl">♪</span>
             </div>
             <div class="text-center">

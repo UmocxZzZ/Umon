@@ -27,8 +27,8 @@ api.interceptors.request.use((config) => {
   if (customBase) {
     config.baseURL = customBase
   }
-  // Cookie is a forbidden header in browsers — use X-Umon-Cookie to pass it through nginx proxy
-  // Electron handles cookies via session API (webRequest interceptor)
+  // Web: use X-Umon-Cookie header (goes through nginx proxy)
+  // Electron: no header needed, webRequest interceptor handles cookie injection
   if (!window.electronAPI) {
     const rawCookie = localStorage.getItem('umon-cookie')
     if (rawCookie) {
@@ -52,7 +52,6 @@ api.interceptors.response.use(
     return data
   },
   (err) => {
-    console.error('[API Error]', err.message)
     return Promise.reject(err)
   },
 )

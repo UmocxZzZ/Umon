@@ -265,18 +265,24 @@ export async function checkQrStatus(key: string): Promise<QrCheckResult> {
 }
 
 export async function getUserAccount(_cookie: string): Promise<UserProfile | null> {
-  const res = (await api.get('/user/account', {
-    params: { timestamp: Date.now() },
-  })) as {
-    account: { vipType: number } | null
-    profile: { userId: number; nickname: string; avatarUrl: string } | null
-  }
-  if (!res.profile) return null
-  return {
-    userId: res.profile.userId,
-    nickname: res.profile.nickname,
-    avatarUrl: res.profile.avatarUrl,
-    vipType: res.account?.vipType ?? 0,
+  try {
+    const res = (await api.get('/user/account', {
+      params: { timestamp: Date.now() },
+    })) as {
+      account: { vipType: number } | null
+      profile: { userId: number; nickname: string; avatarUrl: string } | null
+    }
+    console.log('[API] getUserAccount raw response:', res)
+    if (!res.profile) return null
+    return {
+      userId: res.profile.userId,
+      nickname: res.profile.nickname,
+      avatarUrl: res.profile.avatarUrl,
+      vipType: res.account?.vipType ?? 0,
+    }
+  } catch (e) {
+    console.error('[API] getUserAccount failed:', e)
+    return null
   }
 }
 

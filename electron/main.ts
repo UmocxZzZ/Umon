@@ -7,6 +7,32 @@ import https from 'node:https'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// Load .env file manually for Electron main process
+function loadEnvFile() {
+  try {
+    const envPath = path.join(__dirname, '..', '.env')
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8')
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith('#')) continue
+        const eqIndex = trimmed.indexOf('=')
+        if (eqIndex > 0) {
+          const key = trimmed.slice(0, eqIndex).trim()
+          const value = trimmed.slice(eqIndex + 1).trim()
+          if (!process.env[key]) {
+            process.env[key] = value
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[Main] Failed to load .env:', e)
+  }
+}
+
+loadEnvFile()
+
 let mainWindow: BrowserWindow | null = null
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
@@ -23,6 +49,7 @@ function createWindow() {
     minHeight: 600,
     frame: false,
     titleBarStyle: 'hidden',
+    title: 'Umon',
     backgroundColor: '#0a0a0a',
     webPreferences: {
       preload: preloadPath,
@@ -35,6 +62,28 @@ function createWindow() {
     mainWindow.loadURL(VITE_DEV_SERVER_URL)
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
+  }
+
+  // Update title after page loads
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow?.setTitle('Umon')
+    // Set SMTC metadata for Windows
+    if (process.platform === 'win32') {
+      mainWindow?.webContents.executeJavaScript(`
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'Umon',
+            artist: 'Music Player',
+            album: ''
+          });
+        }
+      `).catch(() => {})
+    }
+  })
+
+  // Open DevTools in development
+  if (VITE_DEV_SERVER_URL) {
+    mainWindow.webContents.openDevTools()
   }
 }
 
@@ -322,10 +371,11 @@ function cleanCookieString(raw: string): string {
 
 // Inject stored cookie into all requests to the API server
 function setupWebRequestFilter() {
+  console.log('[Main] Setting up webRequest filter for:', API_BASE)
   session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: [`${API_BASE}/*`] },
     (details, callback) => {
-      if (storedCookie && !details.requestHeaders['Cookie']) {
+      if (storedCookie) {
         details.requestHeaders['Cookie'] = storedCookie
       }
       callback({ requestHeaders: details.requestHeaders })
@@ -336,27 +386,7 @@ function setupWebRequestFilter() {
 ipcMain.handle('set-cookie', async (_event, cookieStr: string) => {
   storedCookie = cleanCookieString(cookieStr)
   console.log('[Main] Cookie stored, length:', storedCookie.length)
-
-  // Also set in session cookies as fallback
-  const pairs = storedCookie.split(/;\s*/).filter(Boolean)
-  for (const pair of pairs) {
-    const eq = pair.indexOf('=')
-    if (eq < 1) continue
-    const name = pair.slice(0, eq).trim()
-    const value = pair.slice(eq + 1).trim()
-    try {
-      await session.defaultSession.cookies.set({
-        url: API_BASE,
-        name,
-        value,
-        path: '/',
-        httpOnly: false,
-        secure: false,
-      })
-    } catch (e) {
-      console.error('[Main] Failed to set session cookie:', name, e)
-    }
-  }
+  console.log('[Main] Cookie preview:', storedCookie.substring(0, 100) + '...')
 })
 
 ipcMain.handle('clear-cookies', async () => {
@@ -364,7 +394,19 @@ ipcMain.handle('clear-cookies', async () => {
   await session.defaultSession.clearStorageData({ storages: ['cookies'] })
 })
 
+ipcMain.handle('get-stored-cookie', () => {
+  return storedCookie
+})
+
 app.whenReady().then(() => {
+  // Set app name for SMTC
+  app.setName('Umon')
+
+  // Set app user model id for Windows SMTC
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.umon.player')
+  }
+
   setupWebRequestFilter()
   createWindow()
 })

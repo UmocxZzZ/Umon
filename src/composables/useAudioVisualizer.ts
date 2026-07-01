@@ -40,6 +40,8 @@ export function useAudioVisualizer() {
   function init(audioElement: HTMLAudioElement, force = false) {
     if (!force && audioCtx && connectedElement === audioElement && analyser) return
 
+    console.log('[AudioViz] init, force:', force, 'same element:', connectedElement === audioElement)
+
     // Cleanup previous connections
     if (streamSource) {
       try { streamSource.disconnect() } catch { /* ignore */ }
@@ -64,15 +66,14 @@ export function useAudioVisualizer() {
     analyser.smoothingTimeConstant = 0.8
 
     // Use captureStream to get audio data without taking over output
-    // This avoids CORS issues with cross-origin audio
     try {
       const stream = (audioElement as HTMLAudioElement & { captureStream(): MediaStream }).captureStream()
       streamSource = audioCtx.createMediaStreamSource(stream)
       streamSource.connect(analyser)
-      // Don't connect analyser to destination - audio plays normally through the element
       connectedElement = audioElement
       dataArray = new Uint8Array(analyser.frequencyBinCount)
       isInitialized.value = true
+      console.log('[AudioViz] connected to new audio element')
     } catch (e) {
       console.warn('[AudioViz] captureStream failed:', e)
       connectedElement = audioElement

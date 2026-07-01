@@ -9,10 +9,13 @@ import { useAuthStore } from '@/stores/auth'
 import { useLikesStore } from '@/stores/likes'
 import { getUserAccount } from '@/lib/api'
 import { useToast } from '@/composables/useToast'
+import { useMediaSession } from '@/composables/useMediaSession'
 
 const auth = useAuthStore()
 const likes = useLikesStore()
 const toast = useToast()
+
+useMediaSession()
 
 onMounted(async () => {
   if (auth.cookie) {
@@ -25,7 +28,6 @@ onMounted(async () => {
       if (profile) {
         auth.setProfile(profile)
       }
-      // profile null = server returned no session data, but keep cookie (might be temporary)
     } catch {
       // Network error — keep cookie, don't destroy login on transient failures
     }

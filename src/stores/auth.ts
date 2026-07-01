@@ -28,15 +28,22 @@ export const useAuthStore = defineStore('auth', () => {
   const profile = ref<UserProfile | null>(null)
   const isLoggedIn = ref(false)
 
+  function syncToElectron(c: string) {
+    if (window.electronAPI?.setCookie) {
+      window.electronAPI.setCookie(c)
+    }
+  }
+
+  // Sync existing cookie to Electron on init
+  if (cookie.value) {
+    syncToElectron(cookie.value)
+  }
+
   function setCookie(c: string) {
     const cleaned = cleanCookieString(c)
     cookie.value = cleaned
     localStorage.setItem('umon-cookie', cleaned)
-    // In Electron, store cookie for webRequest header injection
-    if (window.electronAPI?.setCookie) {
-      console.log('[Auth] setting Electron cookie')
-      window.electronAPI.setCookie(c)
-    }
+    syncToElectron(cleaned)
   }
 
   function setProfile(p: UserProfile) {

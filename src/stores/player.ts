@@ -5,8 +5,13 @@ import { shuffleArray } from '@/lib/utils'
 import { getSongUrl, getLyric } from '@/lib/api'
 
 export const usePlayerStore = defineStore('player', () => {
-  const audio = new Audio()
-  audio.preload = 'auto'
+  // Double audio elements for seamless playback
+  const audioA = new Audio()
+  const audioB = new Audio()
+  audioA.preload = 'auto'
+  audioB.preload = 'auto'
+  let activeAudio: HTMLAudioElement = audioA
+  let preloadedSongId: number | null = null
 
   const playlist = ref<Song[]>([])
   const currentIndex = ref(-1)
@@ -68,25 +73,29 @@ export const usePlayerStore = defineStore('player', () => {
     return idx
   })
 
-  // Sync audio events
-  audio.addEventListener('timeupdate', () => {
-    currentTime.value = audio.currentTime
-  })
-  audio.addEventListener('loadedmetadata', () => {
-    duration.value = audio.duration
-  })
-  audio.addEventListener('ended', () => {
-    next()
-  })
-  audio.addEventListener('play', () => {
-    isPlaying.value = true
-  })
-  audio.addEventListener('pause', () => {
-    isPlaying.value = false
-  })
+  // Setup event listeners for both audio elements
+  function setupAudioEvents(a: HTMLAudioElement) {
+    a.addEventListener('timeupdate', () => {
+      if (a === activeAudio) currentTime.value = a.currentTime
+    })
+    a.addEventListener('loadedmetadata', () => {
+      if (a === activeAudio) duration.value = a.duration
+    })
+    a.addEventListener('ended', () => {
+      if (a === activeAudio) next()
+    })
+    a.addEventListener('play', () => {
+      if (a === activeAudio) isPlaying.value = true
+    })
+    a.addEventListener('pause', () => {
+      if (a === activeAudio) isPlaying.value = false
+    })
+  }
+  setupAudioEvents(audioA)
+  setupAudioEvents(audioB)
 
   watch(volume, (v) => {
-    audio.volume = v
+    activeAudio.volume = v
     localStorage.setItem('umon-volume', String(v))
   })
 
@@ -98,14 +107,59 @@ export const usePlayerStore = defineStore('player', () => {
     localStorage.setItem('umon-history', JSON.stringify(playHistory.value))
   }
 
-  // Synchronous play — called when URL is already cached (preserves user gesture)
-  function playWithUrl(song: Song, url: string) {
-    audio.pause()
-    audio.src = toProxyUrl(url)
-    audio.load()
-    audio.play().catch(() => {})
+  // Callback for visualizer reconnection - passes new audio element directly
+  let onAudioSwitch: ((newAudio: HTMLAudioElement) => void) | null = null
+  function setOnAudioSwitch(cb: (newAudio: HTMLAudioElement) => void) {
+    onAudioSwitch = cb
+  }
+
+  // Switch to the other audio element for seamless playback
+  function switchAudio(song: Song, url: string) {
+    const newAudio = activeAudio === audioA ? audioB : audioA
+    const oldAudio = activeAudio
+
+    // Setup new audio BEFORE pausing old
+    newAudio.src = toProxyUrl(url)
+    newAudio.volume = volume.value
+
+    // Switch active audio first (events will now target new audio)
+    activeAudio = newAudio
+    preloadedSongId = null
+
+    // Update SMTC metadata
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: song.name,
+        artist: song.artist,
+        album: song.album || '',
+        artwork: song.cover
+          ? [{ src: song.cover, sizes: '256x256', type: 'image/jpeg' }]
+          : [],
+      })
+      navigator.mediaSession.playbackState = 'playing'
+    }
+
+    // Start new audio FIRST (seamless overlap)
+    newAudio.play().catch(() => {})
+
+    // THEN pause old audio (after new one starts)
+    setTimeout(() => oldAudio.pause(), 50)
+
+    // Notify visualizer to reconnect - pass new audio element directly
+    if (onAudioSwitch) {
+      setTimeout(() => onAudioSwitch!(newAudio), 30)
+    }
+
     getLyric(song.id).then((l) => { lyrics.value = l })
     isLoading.value = false
+
+    // Preload adjacent songs after a delay
+    setTimeout(preloadAdjacent, 500)
+  }
+
+  // Synchronous play — called when URL is already cached (preserves user gesture)
+  function playWithUrl(song: Song, url: string) {
+    switchAudio(song, url)
   }
 
   async function loadAndPlay(song: Song) {
@@ -114,17 +168,12 @@ export const usePlayerStore = defineStore('player', () => {
     try {
       let url = urlCache.get(song.id)
       if (url) {
-        // Cached with valid URL: play synchronously
         playWithUrl(song, url)
       } else {
-        // Not cached or cached as null (prefetch placeholder / failed): fetch now
         url = await getSongUrl(song.id) ?? null
         urlCache.set(song.id, url)
         if (url) {
-          audio.pause()
-          audio.src = toProxyUrl(url)
-          audio.load()
-          audio.play().catch(() => {})
+          switchAudio(song, url)
         }
         getLyric(song.id).then((l) => { lyrics.value = l })
       }
@@ -133,6 +182,26 @@ export const usePlayerStore = defineStore('player', () => {
     } finally {
       isLoading.value = false
     }
+  }
+
+  // Preload next/prev songs
+  function preloadSong(song: Song) {
+    const url = urlCache.get(song.id)
+    if (!url) return
+    if (preloadedSongId === song.id) return
+
+    const idleAudio = activeAudio === audioA ? audioB : audioA
+    idleAudio.src = toProxyUrl(url)
+    idleAudio.preload = 'auto'
+    idleAudio.load()
+    preloadedSongId = song.id
+  }
+
+  function preloadAdjacent() {
+    const list = playMode.value === 'shuffle' ? shuffledPlaylist.value : playlist.value
+    if (list.length <= 1) return
+    const nextIdx = (currentIndex.value + 1) % list.length
+    if (list[nextIdx]) preloadSong(list[nextIdx])
   }
 
 
@@ -149,8 +218,8 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   function play() {
-    if (audio.src) {
-      audio.play()
+    if (activeAudio.src) {
+      activeAudio.play()
     } else if (currentSong.value) {
       loadAndPlay(currentSong.value)
     }
@@ -158,7 +227,7 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   function pause() {
-    audio.pause()
+    activeAudio.pause()
     isPlaying.value = false
   }
 
@@ -171,8 +240,8 @@ export const usePlayerStore = defineStore('player', () => {
     const list = playMode.value === 'shuffle' ? shuffledPlaylist.value : playlist.value
     if (list.length === 0) return
     if (playMode.value === 'single') {
-      audio.currentTime = 0
-      audio.play()
+      activeAudio.currentTime = 0
+      activeAudio.play()
       return
     }
     currentIndex.value = (currentIndex.value + 1) % list.length
@@ -183,8 +252,8 @@ export const usePlayerStore = defineStore('player', () => {
     const list = playMode.value === 'shuffle' ? shuffledPlaylist.value : playlist.value
     if (list.length === 0) return
     if (playMode.value === 'single') {
-      audio.currentTime = 0
-      audio.play()
+      activeAudio.currentTime = 0
+      activeAudio.play()
       return
     }
     currentIndex.value = (currentIndex.value - 1 + list.length) % list.length
@@ -193,7 +262,7 @@ export const usePlayerStore = defineStore('player', () => {
 
   function seek(ratio: number) {
     const t = ratio * duration.value
-    audio.currentTime = t
+    activeAudio.currentTime = t
     currentTime.value = t
   }
 
@@ -220,7 +289,7 @@ export const usePlayerStore = defineStore('player', () => {
 
   function setVolume(v: number) {
     volume.value = Math.max(0, Math.min(1, v))
-    audio.volume = volume.value
+    activeAudio.volume = volume.value
   }
 
   function toggleFullScreen() {
@@ -239,7 +308,7 @@ export const usePlayerStore = defineStore('player', () => {
         song: currentSong.value,
         playlist: playlist.value,
         index: currentIndex.value,
-        progress: audio.currentTime,
+        progress: activeAudio.currentTime,
         mode: playMode.value,
       }))
     } catch { /* quota exceeded, ignore */ }
@@ -247,13 +316,15 @@ export const usePlayerStore = defineStore('player', () => {
 
   // Save periodically (throttled) and on close
   let lastSaveTime = 0
-  audio.addEventListener('timeupdate', () => {
+  function onTimeUpdate() {
     const now = Date.now()
     if (now - lastSaveTime > 5000) {
       lastSaveTime = now
       saveState()
     }
-  })
+  }
+  audioA.addEventListener('timeupdate', onTimeUpdate)
+  audioB.addEventListener('timeupdate', onTimeUpdate)
   window.addEventListener('beforeunload', saveState)
 
   // Restore on init
@@ -282,15 +353,15 @@ export const usePlayerStore = defineStore('player', () => {
       getSongUrl(state.song.id).then((url) => {
         if (!url) return
         urlCache.set(state.song.id, url)
-        audio.src = toProxyUrl(url)
-        audio.load()
+        activeAudio.src = toProxyUrl(url)
+        activeAudio.load()
         // Seek once metadata is loaded
         const onLoaded = () => {
-          audio.currentTime = savedProgress
+          activeAudio.currentTime = savedProgress
           currentTime.value = savedProgress
-          audio.removeEventListener('loadedmetadata', onLoaded)
+          activeAudio.removeEventListener('loadedmetadata', onLoaded)
         }
-        audio.addEventListener('loadedmetadata', onLoaded)
+        activeAudio.addEventListener('loadedmetadata', onLoaded)
         // Don't auto-play, just load the track
         isLoading.value = false
       })
@@ -301,10 +372,10 @@ export const usePlayerStore = defineStore('player', () => {
   restoreState()
 
   // Init volume
-  audio.volume = volume.value
+  activeAudio.volume = volume.value
 
   return {
-    audio,
+    get audio() { return activeAudio },
     playlist,
     currentIndex,
     isPlaying,
@@ -333,6 +404,7 @@ export const usePlayerStore = defineStore('player', () => {
     setDuration,
     setVolume,
     toggleFullScreen,
+    setOnAudioSwitch,
     togglePlaylistDrawer,
     prefetchUrls,
   }
