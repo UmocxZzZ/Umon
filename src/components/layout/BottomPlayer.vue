@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onUnmounted } from 'vue'
+import { computed, ref } from 'vue'
 import {
   Heart,
   SkipBack,
@@ -22,6 +22,8 @@ import DownloadDialog from '@/components/DownloadDialog.vue'
 import { formatTime } from '@/lib/utils'
 import { useSongNavigate } from '@/lib/navigate'
 import ArtistLinks from '@/components/ArtistLinks.vue'
+import ProgressBar from '@/components/layout/ProgressBar.vue'
+import VolumeBar from '@/components/layout/VolumeBar.vue'
 import type { PlayMode } from '@/types'
 
 const player = usePlayerStore()
@@ -57,110 +59,14 @@ const playModeLabel = computed(() => {
   }
   return map[player.playMode]
 })
-
-// Progress bar drag
-const isDragging = ref(false)
-const dragProgress = ref(0)
-const progressRef = ref<HTMLElement | null>(null)
-
-const displayProgress = computed(() =>
-  isDragging.value ? dragProgress.value : player.progress,
-)
-
-function clamp(val: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, val))
-}
-
-function calcRatio(e: MouseEvent) {
-  if (!progressRef.value) return 0
-  const rect = progressRef.value.getBoundingClientRect()
-  return clamp((e.clientX - rect.left) / rect.width, 0, 1)
-}
-
-function onProgressMouseDown(e: MouseEvent) {
-  isDragging.value = true
-  dragProgress.value = calcRatio(e)
-  document.addEventListener('mousemove', onProgressMouseMove)
-  document.addEventListener('mouseup', onProgressMouseUp)
-}
-
-function onProgressMouseMove(e: MouseEvent) {
-  if (!isDragging.value) return
-  dragProgress.value = calcRatio(e)
-}
-
-function onProgressMouseUp(e: MouseEvent) {
-  if (!isDragging.value) return
-  player.seek(calcRatio(e))
-  isDragging.value = false
-  document.removeEventListener('mousemove', onProgressMouseMove)
-  document.removeEventListener('mouseup', onProgressMouseUp)
-}
-
-onUnmounted(() => {
-  document.removeEventListener('mousemove', onProgressMouseMove)
-  document.removeEventListener('mouseup', onProgressMouseUp)
-  document.removeEventListener('mousemove', onVolumeMouseMove)
-  document.removeEventListener('mouseup', onVolumeMouseUp)
-})
-
-// Volume bar drag
-const isVolDragging = ref(false)
-const dragVolume = ref(0)
-const volumeRef = ref<HTMLElement | null>(null)
-
-const displayVolume = computed(() =>
-  isVolDragging.value ? dragVolume.value : player.volume,
-)
-
-function calcVolumeRatio(e: MouseEvent) {
-  if (!volumeRef.value) return 0
-  const rect = volumeRef.value.getBoundingClientRect()
-  return clamp((e.clientX - rect.left) / rect.width, 0, 1)
-}
-
-function onVolumeMouseDown(e: MouseEvent) {
-  isVolDragging.value = true
-  dragVolume.value = calcVolumeRatio(e)
-  player.setVolume(dragVolume.value)
-  document.addEventListener('mousemove', onVolumeMouseMove)
-  document.addEventListener('mouseup', onVolumeMouseUp)
-}
-
-function onVolumeMouseMove(e: MouseEvent) {
-  if (!isVolDragging.value) return
-  dragVolume.value = calcVolumeRatio(e)
-  player.setVolume(dragVolume.value)
-}
-
-function onVolumeMouseUp(e: MouseEvent) {
-  if (!isVolDragging.value) return
-  player.setVolume(calcVolumeRatio(e))
-  isVolDragging.value = false
-  document.removeEventListener('mousemove', onVolumeMouseMove)
-  document.removeEventListener('mouseup', onVolumeMouseUp)
-}
 </script>
 
 <template>
-  <!-- Progress bar: fixed above everything including fullscreen player -->
-  <div
-    ref="progressRef"
-    class="fixed bottom-20 left-0 right-0 z-50 h-1 bg-muted cursor-pointer group"
-    @mousedown="onProgressMouseDown"
-  >
-    <div
-      class="h-full bg-primary transition-none"
-      :style="{ width: `${displayProgress * 100}%` }"
-    />
-    <div
-      class="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-primary
-             opacity-0 group-hover:opacity-100 transition-opacity"
-      :style="{ left: `${displayProgress * 100}%` }"
-    />
-  </div>
-
   <footer class="h-20 bg-player border-t border-border flex flex-col select-none relative z-40">
+    <!-- Progress bar: aligned at top of player -->
+    <div class="absolute top-0 left-0 right-0 z-10">
+      <ProgressBar />
+    </div>
     <div class="flex-1 flex items-center px-4">
       <!-- Left: Song info -->
       <div class="flex items-center gap-3 w-64 min-w-0">
@@ -268,21 +174,7 @@ function onVolumeMouseUp(e: MouseEvent) {
           <VolumeX v-if="player.volume === 0" :size="16" class="text-muted-foreground" />
           <Volume2 v-else :size="16" class="text-muted-foreground" />
         </button>
-        <div
-          ref="volumeRef"
-          class="w-20 h-1 bg-muted rounded-full cursor-pointer relative group shrink-0"
-          @mousedown="onVolumeMouseDown"
-        >
-          <div
-            class="h-full bg-primary rounded-full transition-none"
-            :style="{ width: `${displayVolume * 100}%` }"
-          />
-          <div
-            class="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-primary
-                   opacity-0 group-hover:opacity-100 transition-opacity"
-            :style="{ left: `${displayVolume * 100}%` }"
-          />
-        </div>
+        <VolumeBar />
         <button
           class="p-1.5 rounded-full hover:bg-accent transition-colors shrink-0"
           @click="player.togglePlaylistDrawer"
