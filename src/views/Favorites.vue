@@ -4,10 +4,11 @@ import { Heart, Play, Clock, Download } from 'lucide-vue-next'
 import { usePlayerStore } from '@/stores/player'
 import { useLikesStore } from '@/stores/likes'
 import { useDownloadsStore } from '@/stores/downloads'
+import { usePlaylistCacheStore } from '@/stores/playlistCache'
 import DownloadDialog from '@/components/DownloadDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import { formatTime } from '@/lib/utils'
-import { getUserPlaylists, getPlaylistTracks } from '@/lib/api'
+import { getUserPlaylists } from '@/lib/api'
 import { useSongNavigate } from '@/lib/navigate'
 import ArtistLinks from '@/components/ArtistLinks.vue'
 import type { Song } from '@/types'
@@ -16,38 +17,38 @@ const player = usePlayerStore()
 const likes = useLikesStore()
 const downloads = useDownloadsStore()
 const auth = useAuthStore()
+const cache = usePlaylistCacheStore()
 const { goAlbum } = useSongNavigate()
 
 const isElectron = computed(() => !!window.electronAPI)
 const downloadSong = ref<Song | null>(null)
 
-const favorites = ref<Song[]>([])
 const loading = ref(true)
-const loadingMore = ref(false)
-const hasMore = ref(true)
 const playlistId = ref(0)
 const totalTracks = ref(0)
 const sentinelRef = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
 
+const favorites = computed(() => cache.getTracks(playlistId.value))
+const hasMore = computed(() => !cache.isAllLoaded(playlistId.value))
+const loadingMore = computed(() => cache.get(playlistId.value)?.loading ?? false)
+
 async function loadFavorites() {
   if (!auth.profile) {
-    favorites.value = []
     loading.value = false
     return
   }
   loading.value = true
-  hasMore.value = true
-  favorites.value = []
   try {
     const playlists = await getUserPlaylists(auth.profile.userId)
     const liked = playlists.find((p) => p.specialType === 5) ?? playlists[0]
     if (liked) {
       playlistId.value = liked.id
       totalTracks.value = liked.trackCount
-      const result = await getPlaylistTracks(liked.id, 0, 100)
-      favorites.value = result.songs
-      hasMore.value = result.hasMore
+      // Load first batch
+      await cache.loadFirst(liked.id, liked.trackCount)
+      // Continue loading in background
+      cache.loadAll(liked.id)
     }
   } catch (e) {
     console.error('[Favorites] load error:', e)
@@ -59,19 +60,8 @@ async function loadFavorites() {
 
 async function loadMore() {
   if (loadingMore.value || !hasMore.value || !playlistId.value) return
-  loadingMore.value = true
-  // Disconnect observer immediately to prevent duplicate triggers
-  if (observer) observer.disconnect()
-  try {
-    const result = await getPlaylistTracks(playlistId.value, favorites.value.length, 100)
-    favorites.value = [...favorites.value, ...result.songs]
-    hasMore.value = result.hasMore
-  } catch (e) {
-    console.error('[Favorites] load more error:', e)
-  } finally {
-    loadingMore.value = false
-    nextTick(setupObserver)
-  }
+  // Trigger background loading
+  cache.loadAll(playlistId.value)
 }
 
 function setupObserver() {
@@ -93,15 +83,28 @@ onUnmounted(() => {
 
 watch(() => auth.isLoggedIn, (v) => {
   if (v) loadFavorites()
-  else {
-    favorites.value = []
-    loading.value = false
-  }
+  else loading.value = false
 })
 
-function playAll() {
-  if (favorites.value.length > 0) {
-    player.setPlaylist(favorites.value, 0)
+async function playAll() {
+  // Load all songs first if not all loaded yet
+  if (!cache.isAllLoaded(playlistId.value)) {
+    await cache.loadAll(playlistId.value)
+  }
+  const tracks = cache.getTracks(playlistId.value)
+  if (tracks.length > 0) {
+    player.setPlaylist(tracks, 0)
+  }
+}
+
+function playSong(index: number) {
+  const tracks = cache.getTracks(playlistId.value)
+  player.setPlaylist(tracks, index)
+  // Append remaining tracks in background if not all loaded
+  if (!cache.isAllLoaded(playlistId.value)) {
+    cache.loadAll(playlistId.value).then((allTracks) => {
+      player.appendToPlaylist(allTracks)
+    })
   }
 }
 </script>
@@ -139,7 +142,7 @@ function playAll() {
           v-for="(song, i) in favorites"
           :key="song.id"
           class="flex items-center gap-4 px-4 py-3 hover:bg-accent cursor-pointer transition-colors"
-          @dblclick="player.setPlaylist(favorites, i)"
+          @dblclick="playSong(i)"
         >
           <span class="w-8 text-center text-sm text-muted-foreground">
             {{ String(i + 1).padStart(2, '0') }}

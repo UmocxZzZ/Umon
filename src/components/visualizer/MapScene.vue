@@ -12,7 +12,6 @@ const props = defineProps<{
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const player = usePlayerStore()
 const { init: initAudio, resume, getAudioData } = useAudioVisualizer()
-let audioInited = false
 
 // Three.js objects (shallowRef to avoid reactivity overhead)
 const renderer = shallowRef<THREE.WebGLRenderer | null>(null)
@@ -47,18 +46,14 @@ function addRipple(x: number, y: number, strength: number, isWhite = false) {
   rippleIndex = (idx + 1) % 10
 }
 
-// Auto-trigger ripples based on audio energy
 let lastRippleTime = 0
 
 function getThemeBgColor(): number {
-  // Read CSS variable --color-background from document
   const style = getComputedStyle(document.documentElement)
   const bg = style.getPropertyValue('--color-background').trim()
-  // Parse hex color (e.g., "#0a0a0a" or "#ffffff")
   if (bg.startsWith('#')) {
     return parseInt(bg.slice(1), 16)
   }
-  // Default dark background
   return 0x0a0a0a
 }
 
@@ -68,7 +63,6 @@ function setupScene(canvas: HTMLCanvasElement) {
   const height = rect.height || window.innerHeight
   const bgColor = getThemeBgColor()
 
-  // Renderer - opaque background
   const r = new THREE.WebGLRenderer({
     canvas,
     alpha: false,
@@ -79,30 +73,25 @@ function setupScene(canvas: HTMLCanvasElement) {
   r.setClearColor(bgColor, 1)
   renderer.value = r
 
-  // Scene with background color
   const s = new THREE.Scene()
   s.background = new THREE.Color(bgColor)
   s.fog = new THREE.Fog(bgColor, 50, 200)
   scene.value = s
 
-  // Camera
   const cam = new THREE.PerspectiveCamera(50, width / height, 0.1, 200)
   cam.position.set(30, 35, 40)
   cam.lookAt(0, 0, 0)
   camera.value = cam
 
-  // Lights
   const ambient = new THREE.AmbientLight(0xffffff, 0.5)
   s.add(ambient)
   const dirLight = new THREE.DirectionalLight(0xffffff, 1)
   dirLight.position.set(10, 20, 10)
   s.add(dirLight)
 
-  // Material
   const mat = createMapShaderMaterial()
   material.value = mat
 
-  // Instanced mesh
   const geo = new THREE.BoxGeometry(0.9, 1, 0.9)
   const mesh = new THREE.InstancedMesh(geo, mat, COUNT)
 
@@ -121,23 +110,17 @@ function setupScene(canvas: HTMLCanvasElement) {
   mesh.instanceMatrix.needsUpdate = true
   s.add(mesh)
 
-  // Simple auto-rotate via camera orbit
   let angle = Math.atan2(cam.position.x, cam.position.z)
   const radius = Math.sqrt(cam.position.x ** 2 + cam.position.z ** 2)
   const autoRotateSpeed = 0.0003
 
-  // Track current size to detect changes
   let currentWidth = 0
   let currentHeight = 0
-
-  // Get the parent element for size reference
   const parentEl = canvas.parentElement
 
-  // Animation loop
   function animate() {
     animFrameId.value = requestAnimationFrame(animate)
 
-    // Check for size changes using parent element
     const w = parentEl?.clientWidth || window.innerWidth
     const h = parentEl?.clientHeight || window.innerHeight
     if (w > 0 && h > 0 && (w !== currentWidth || h !== currentHeight)) {
@@ -154,7 +137,6 @@ function setupScene(canvas: HTMLCanvasElement) {
     if (props.active) {
       resume()
 
-      // Get audio data
       const data = getAudioData(player.isPlaying)
 
       mat.uniforms.uBass.value = data.bass
@@ -173,7 +155,6 @@ function setupScene(canvas: HTMLCanvasElement) {
       mat.uniforms.uDensity.value = data.density
       mat.uniforms.uSpectralCentroid.value = data.spectralCentroid
 
-      // Auto-trigger ripples on beats
       if (player.isPlaying && now - lastRippleTime > 0.4 && data.energy > 0.05) {
         const angle2 = Math.random() * Math.PI * 2
         const dist = Math.random() * 25
@@ -185,11 +166,9 @@ function setupScene(canvas: HTMLCanvasElement) {
         lastRippleTime = now
       }
 
-      // Update ripples
       mat.uniforms.uRipples.value = ripples
     }
 
-    // Auto-rotate camera
     angle += autoRotateSpeed
     cam.position.x = Math.sin(angle) * radius
     cam.position.z = Math.cos(angle) * radius
@@ -201,37 +180,60 @@ function setupScene(canvas: HTMLCanvasElement) {
   animate()
 }
 
-// Click to add ripple
 function handleClick(e: MouseEvent) {
   if (!canvasRef.value) return
   const rect = canvasRef.value.getBoundingClientRect()
   const x = ((e.clientX - rect.left) / rect.width) * 2 - 1
   const y = -((e.clientY - rect.top) / rect.height) * 2 + 1
-  // Project to ground plane approximately
   addRipple(x * 40, y * 40, 1.5)
 }
 
-// Re-initialize audio when song changes (called from switchAudio after activeAudio changes)
+// Reconnect visualizer when audio element switches
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let pendingCanplay: (() => void) | null = null
+
 player.setOnAudioSwitch((newAudio) => {
-  if (!audioInited) return
-  // Wait for audio to have data before connecting visualizer
-  const tryConnect = () => {
-    if (newAudio.readyState >= 2) {
-      initAudio(newAudio, true)
-    } else {
-      newAudio.addEventListener('canplay', () => initAudio(newAudio, true), { once: true })
-    }
+  // Cancel any pending reconnection
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
   }
-  tryConnect()
+  if (pendingCanplay && connectedAudio) {
+    connectedAudio.removeEventListener('canplay', pendingCanplay)
+    pendingCanplay = null
+  }
+
+  const connect = () => {
+    initAudio(newAudio, true)
+  }
+
+  if (newAudio.readyState >= 2) {
+    connect()
+  } else {
+    pendingCanplay = () => {
+      newAudio.removeEventListener('canplay', pendingCanplay!)
+      pendingCanplay = null
+      connect()
+    }
+    connectedAudio = newAudio
+    newAudio.addEventListener('canplay', pendingCanplay)
+    // Fallback
+    reconnectTimer = setTimeout(() => {
+      if (pendingCanplay) {
+        newAudio.removeEventListener('canplay', pendingCanplay)
+        pendingCanplay = null
+      }
+      connect()
+    }, 500)
+  }
 })
+
+let connectedAudio: HTMLAudioElement | null = null
 
 onMounted(() => {
   if (canvasRef.value) {
     setupScene(canvasRef.value)
-
-    // Initialize audio on mount (user already interacted to enter fullscreen)
     initAudio(player.audio)
-    audioInited = true
   }
 })
 

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Settings, HardDrive, Info, ExternalLink, RefreshCw } from 'lucide-vue-next'
+import { Settings, HardDrive, Info, ExternalLink, RefreshCw, Trash2 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
+import { usePlaylistCacheStore } from '@/stores/playlistCache'
+import { useToast } from '@/composables/useToast'
 import logoUrl from '@/assets/logo.png'
 
 const version = __APP_VERSION__
@@ -9,6 +11,8 @@ const version = __APP_VERSION__
 declare const __APP_VERSION__: string
 
 const settings = useSettingsStore()
+const playlistCache = usePlaylistCacheStore()
+const toast = useToast()
 const isElectron = computed(() => !!window.electronAPI)
 
 const apiBaseInput = ref(settings.apiBase)
@@ -33,6 +37,11 @@ async function checkUpdate() {
   } finally {
     setTimeout(() => { checkingUpdate.value = false }, 1500)
   }
+}
+
+function clearCache() {
+  playlistCache.clearAll()
+  toast.showToast('缓存已清除')
 }
 </script>
 
@@ -88,6 +97,23 @@ async function checkUpdate() {
           更改
         </button>
       </div>
+    </section>
+
+    <!-- Cache -->
+    <section class="bg-card rounded-xl border border-border p-5 space-y-3">
+      <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+        <Trash2 :size="14" />
+        缓存管理
+      </h2>
+      <p class="text-xs text-muted-foreground">
+        清除歌单缓存数据，释放本地存储空间。
+      </p>
+      <button
+        class="px-4 py-2 rounded-lg bg-muted text-sm hover:bg-accent transition-colors"
+        @click="clearCache"
+      >
+        清除缓存
+      </button>
     </section>
 
     <!-- About -->
