@@ -8,6 +8,7 @@ import { formatTime } from '@/lib/utils'
 import { useSongNavigate } from '@/lib/navigate'
 import ArtistLinks from '@/components/ArtistLinks.vue'
 import DownloadDialog from '@/components/DownloadDialog.vue'
+import LazySongCover from '@/components/LazySongCover.vue'
 import type { Song } from '@/types'
 
 const player = usePlayerStore()
@@ -58,7 +59,7 @@ function playAll() {
         <span class="w-8 text-center text-sm text-muted-foreground">
           {{ String(i + 1).padStart(2, '0') }}
         </span>
-        <img v-if="song.cover" :src="song.cover" class="w-10 h-10 rounded object-cover" />
+        <LazySongCover :src="song.cover" :alt="song.name" />
         <div class="flex-1 min-w-0">
           <button
             class="text-sm font-medium truncate hover:text-primary transition-colors block max-w-full text-left"

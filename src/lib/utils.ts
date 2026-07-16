@@ -1,3 +1,6 @@
+import type { AudioQuality } from '@/types'
+import { DEFAULT_AUDIO_QUALITY } from '@/lib/audioQuality'
+
 export function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
@@ -13,8 +16,8 @@ export function shuffleArray<T>(arr: T[]): T[] {
   return result
 }
 
-export function getSongUrl(id: number): string {
-  return `/api/song/url/v1?id=${id}&level=exhigh`
+export function getSongUrl(id: number, quality: AudioQuality = DEFAULT_AUDIO_QUALITY): string {
+  return `/api/song/url/v1?id=${id}&level=${quality}`
 }
 
 export function getCoverUrl(id: number): string {

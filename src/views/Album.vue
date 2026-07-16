@@ -9,7 +9,9 @@ import DownloadDialog from '@/components/DownloadDialog.vue'
 import { formatTime } from '@/lib/utils'
 import { getAlbumDetail } from '@/lib/api'
 import { useSongNavigate } from '@/lib/navigate'
+import { getDisplayThumbnailUrl } from '@/lib/image'
 import ArtistLinks from '@/components/ArtistLinks.vue'
+import LazySongCover from '@/components/LazySongCover.vue'
 import type { Song } from '@/types'
 
 const route = useRoute()
@@ -68,8 +70,9 @@ function playAll() {
         <div class="w-32 h-32 rounded-xl overflow-hidden bg-muted shrink-0">
           <img
             v-if="albumCover"
-            :src="albumCover"
+            :src="getDisplayThumbnailUrl(albumCover, 128)"
             :alt="albumName"
+            decoding="async"
             class="w-full h-full object-cover"
           />
           <div v-else class="w-full h-full flex items-center justify-center">
@@ -108,11 +111,7 @@ function playAll() {
           <span class="w-8 text-center text-sm text-muted-foreground">
             {{ String(i + 1).padStart(2, '0') }}
           </span>
-          <img
-            v-if="song.cover"
-            :src="song.cover"
-            class="w-10 h-10 rounded object-cover"
-          />
+          <LazySongCover :src="song.cover" :alt="song.name" />
           <div class="flex-1 min-w-0">
             <p class="text-sm font-medium truncate">{{ song.name }}</p>
             <ArtistLinks

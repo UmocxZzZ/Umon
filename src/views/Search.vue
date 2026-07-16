@@ -14,7 +14,9 @@ import {
   searchPlaylists,
 } from '@/lib/api'
 import { useSongNavigate } from '@/lib/navigate'
+import { getDisplayThumbnailUrl } from '@/lib/image'
 import ArtistLinks from '@/components/ArtistLinks.vue'
+import LazySongCover from '@/components/LazySongCover.vue'
 import type { SearchResult } from '@/lib/api'
 import type { Song } from '@/types'
 
@@ -135,11 +137,7 @@ watch(
             <span class="w-8 text-center text-sm text-muted-foreground">
               {{ String(i + 1).padStart(2, '0') }}
             </span>
-            <img
-              v-if="song.cover"
-              :src="song.cover"
-              class="w-10 h-10 rounded object-cover"
-            />
+            <LazySongCover :src="song.cover" :alt="song.name" />
             <div class="flex-1 min-w-0">
               <button
                 class="text-sm font-medium truncate hover:text-primary transition-colors block max-w-full text-left"
@@ -206,7 +204,9 @@ watch(
             <div class="w-full aspect-square rounded-full overflow-hidden bg-muted">
               <img
                 v-if="a.cover"
-                :src="a.cover"
+                :src="getDisplayThumbnailUrl(a.cover, 240)"
+                loading="lazy"
+                decoding="async"
                 class="w-full h-full object-cover group-hover:scale-105 transition-transform"
               />
               <div v-else class="w-full h-full flex items-center justify-center">
@@ -234,7 +234,9 @@ watch(
             <div class="w-full aspect-square rounded-xl overflow-hidden bg-muted">
               <img
                 v-if="a.cover"
-                :src="a.cover"
+                :src="getDisplayThumbnailUrl(a.cover, 240)"
+                loading="lazy"
+                decoding="async"
                 class="w-full h-full object-cover group-hover:scale-105 transition-transform"
               />
               <div v-else class="w-full h-full flex items-center justify-center">
@@ -263,7 +265,9 @@ watch(
             <div class="w-full aspect-square rounded-xl overflow-hidden bg-muted relative">
               <img
                 v-if="pl.cover"
-                :src="pl.cover"
+                :src="getDisplayThumbnailUrl(pl.cover, 240)"
+                loading="lazy"
+                decoding="async"
                 class="w-full h-full object-cover group-hover:scale-105 transition-transform"
               />
               <div v-else class="w-full h-full flex items-center justify-center">

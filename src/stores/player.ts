@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
-import type { Song, PlayMode, LyricLine } from '@/types'
+import type { AudioQuality, Song, PlayMode, LyricLine } from '@/types'
 import { shuffleArray } from '@/lib/utils'
 import { getSongUrl, getLyric } from '@/lib/api'
+import { useSettingsStore } from '@/stores/settings'
 import {
   attachMediaElement,
   connectAudioSource,
@@ -13,6 +14,8 @@ import {
 } from '@/lib/audioEngine'
 
 export const usePlayerStore = defineStore('player', () => {
+  const settings = useSettingsStore()
+
   // HTML5 Audio for immediate playback
   const audio = new Audio()
   audio.preload = 'auto'
@@ -21,10 +24,23 @@ export const usePlayerStore = defineStore('player', () => {
   // Web Audio API for gapless transitions
   let currentSource: AudioBufferSourceNode | null = null
 
-  // Buffer cache: songId → AudioBuffer
-  const MAX_BUFFER_CACHE = 8
-  const bufferCache = new Map<number, AudioBuffer>()
-  const bufferFetchPromises = new Map<number, Promise<void>>()
+  interface CachedAudioBuffer {
+    buffer: AudioBuffer
+    bytes: number
+    quality: AudioQuality
+  }
+
+  // Decoded PCM is expensive (~80 MiB for a four-minute stereo track). Keep
+  // only the next track and enforce a byte budget instead of a song count.
+  const MAX_DECODED_BUFFER_BYTES = 128 * 1024 * 1024
+  const MAX_ENCODED_BUFFER_BYTES = 64 * 1024 * 1024
+  const bufferCache = new Map<number, CachedAudioBuffer>()
+  const bufferFetchPromises = new Map<string, Promise<AudioBuffer | null>>()
+  const bufferFetchControllers = new Map<string, AbortController>()
+  let bufferCacheBytes = 0
+  let bufferWorkQueue: Promise<void> = Promise.resolve()
+  let prefetchTimer: number | null = null
+  let cancelMetadataWait: (() => void) | null = null
 
   const playlist = ref<Song[]>([])
   const currentIndex = ref(-1)
@@ -45,8 +61,9 @@ export const usePlayerStore = defineStore('player', () => {
 
   const URL_CACHE_TTL = 4 * 60 * 1000
   const EMPTY_URL_CACHE_TTL = 15 * 1000
-  const urlCache = new Map<number, { value: string | null; expiresAt: number }>()
-  const urlFetchPromises = new Map<number, Promise<string | null>>()
+  const MAX_URL_CACHE_ENTRIES = 100
+  const urlCache = new Map<string, { value: string | null; expiresAt: number }>()
+  const urlFetchPromises = new Map<string, Promise<string | null>>()
   // Track which song is currently using WebAudio (gapless mode)
   let gaplessSongId: number | null = null
   let mediaSongId: number | null = null
@@ -65,29 +82,44 @@ export const usePlayerStore = defineStore('player', () => {
     return `/__audio-proxy/${encodeURIComponent(url)}`
   }
 
-  function resolveSongUrl(songId: number): Promise<string | null> {
-    const cached = urlCache.get(songId)
+  function getQualityCacheKey(songId: number, quality: AudioQuality): string {
+    return `${quality}:${songId}`
+  }
+
+  function resolveSongUrl(
+    songId: number,
+    quality: AudioQuality = settings.playbackQuality,
+  ): Promise<string | null> {
+    const cacheKey = getQualityCacheKey(songId, quality)
+    const cached = urlCache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) {
+      urlCache.delete(cacheKey)
+      urlCache.set(cacheKey, cached)
       return Promise.resolve(cached.value)
     }
-    urlCache.delete(songId)
+    urlCache.delete(cacheKey)
 
-    const pending = urlFetchPromises.get(songId)
+    const pending = urlFetchPromises.get(cacheKey)
     if (pending) return pending
 
-    const request = getSongUrl(songId)
+    const request = getSongUrl(songId, quality)
       .then((url) => {
-        urlCache.set(songId, {
+        urlCache.set(cacheKey, {
           value: url,
           expiresAt: Date.now() + (url ? URL_CACHE_TTL : EMPTY_URL_CACHE_TTL),
         })
+        while (urlCache.size > MAX_URL_CACHE_ENTRIES) {
+          const oldestKey = urlCache.keys().next().value as string | undefined
+          if (!oldestKey) break
+          urlCache.delete(oldestKey)
+        }
         return url
       })
       .finally(() => {
-        urlFetchPromises.delete(songId)
+        urlFetchPromises.delete(cacheKey)
       })
 
-    urlFetchPromises.set(songId, request)
+    urlFetchPromises.set(cacheKey, request)
     return request
   }
 
@@ -96,9 +128,10 @@ export const usePlayerStore = defineStore('player', () => {
     const CONCURRENCY = 5
     const toFetch = songs
       .filter((song) => {
-        const cached = urlCache.get(song.id)
+        const cacheKey = getQualityCacheKey(song.id, settings.playbackQuality)
+        const cached = urlCache.get(cacheKey)
         return (!cached || cached.expiresAt <= Date.now())
-          && !urlFetchPromises.has(song.id)
+          && !urlFetchPromises.has(cacheKey)
       })
       .slice(0, MAX_PREFETCH)
     let i = 0
@@ -189,69 +222,192 @@ export const usePlayerStore = defineStore('player', () => {
     localStorage.setItem('umon-history', JSON.stringify(playHistory.value))
   }
 
-  function getCachedBuffer(songId: number): AudioBuffer | null {
-    const buffer = bufferCache.get(songId)
-    if (!buffer) return null
+  function estimateDecodedBufferBytes(buffer: AudioBuffer): number {
+    return buffer.length * buffer.numberOfChannels * Float32Array.BYTES_PER_ELEMENT
+  }
+
+  function estimateTrackBufferBytes(song: Song, quality: AudioQuality): number {
+    if (!Number.isFinite(song.duration) || song.duration <= 0) return 0
+    // Lossless sources may decode above 48 kHz. Use a conservative estimate so
+    // long high-resolution files stay on streaming playback instead of causing
+    // a large transient allocation.
+    const estimatedSampleRate = quality === 'lossless' ? 96_000 : 48_000
+    return Math.ceil(
+      song.duration * estimatedSampleRate * 2 * Float32Array.BYTES_PER_ELEMENT,
+    )
+  }
+
+  function deleteCachedBuffer(songId: number): CachedAudioBuffer | null {
+    const entry = bufferCache.get(songId)
+    if (!entry) return null
     bufferCache.delete(songId)
-    bufferCache.set(songId, buffer)
+    bufferCacheBytes = Math.max(0, bufferCacheBytes - entry.bytes)
+    return entry
+  }
+
+  function getCachedBuffer(
+    songId: number,
+    quality: AudioQuality = settings.playbackQuality,
+  ): AudioBuffer | null {
+    const entry = bufferCache.get(songId)
+    if (!entry) return null
+    if (entry.quality !== quality) {
+      deleteCachedBuffer(songId)
+      return null
+    }
+    return entry.buffer
+  }
+
+  function takeCachedBuffer(
+    songId: number,
+    quality: AudioQuality = settings.playbackQuality,
+  ): AudioBuffer | null {
+    const buffer = getCachedBuffer(songId, quality)
+    if (!buffer) return null
+    deleteCachedBuffer(songId)
     return buffer
   }
 
-  function cacheBuffer(songId: number, buffer: AudioBuffer) {
-    bufferCache.delete(songId)
-    bufferCache.set(songId, buffer)
-    while (bufferCache.size > MAX_BUFFER_CACHE) {
+  function clearCachedBuffers(exceptSongId: number | null = null) {
+    for (const [songId, entry] of bufferCache) {
+      if (songId !== exceptSongId || entry.quality !== settings.playbackQuality) {
+        deleteCachedBuffer(songId)
+      }
+    }
+  }
+
+  function cacheBuffer(songId: number, quality: AudioQuality, buffer: AudioBuffer): boolean {
+    const bytes = estimateDecodedBufferBytes(buffer)
+    if (bytes > MAX_DECODED_BUFFER_BYTES) return false
+
+    deleteCachedBuffer(songId)
+    while (bufferCache.size > 0 || bufferCacheBytes + bytes > MAX_DECODED_BUFFER_BYTES) {
       const oldestId = bufferCache.keys().next().value as number | undefined
       if (oldestId == null) break
-      bufferCache.delete(oldestId)
+      deleteCachedBuffer(oldestId)
     }
+
+    bufferCache.set(songId, { buffer, bytes, quality })
+    bufferCacheBytes += bytes
+    return true
   }
 
-  // Fetch audio buffer via proxy
-  async function fetchBuffer(songId: number): Promise<AudioBuffer | null> {
-    const cachedBuffer = getCachedBuffer(songId)
-    if (cachedBuffer) return cachedBuffer
-    if (bufferFetchPromises.has(songId)) {
-      await bufferFetchPromises.get(songId)
-      return getCachedBuffer(songId)
+  function cancelPendingBufferWork() {
+    if (prefetchTimer !== null) {
+      window.clearTimeout(prefetchTimer)
+      prefetchTimer = null
+    }
+    for (const controller of bufferFetchControllers.values()) controller.abort()
+    bufferFetchControllers.clear()
+    bufferFetchPromises.clear()
+  }
+
+  function isAbortError(error: unknown): boolean {
+    return error instanceof DOMException && error.name === 'AbortError'
+  }
+
+  // Fetching and decoding are intentionally serialized: each operation can
+  // temporarily own both the compressed response and a large decoded PCM copy.
+  function fetchBuffer(
+    song: Song,
+    requestId: number,
+    quality: AudioQuality = settings.playbackQuality,
+  ): Promise<AudioBuffer | null> {
+    const cachedBuffer = getCachedBuffer(song.id, quality)
+    if (cachedBuffer) return Promise.resolve(cachedBuffer)
+    if (estimateTrackBufferBytes(song, quality) > MAX_DECODED_BUFFER_BYTES) {
+      return Promise.resolve(null)
     }
 
-    const url = await resolveSongUrl(songId)
-    if (!url) return null
+    const cacheKey = getQualityCacheKey(song.id, quality)
+    const existing = bufferFetchPromises.get(cacheKey)
+    if (existing) return existing
 
-    const promise = (async () => {
-      try {
-        const context = getPlaybackContext()
-        const proxyUrl = toProxyUrl(url)
-        const resp = await fetch(proxyUrl)
-        if (!resp.ok) throw new Error(`Audio fetch failed with HTTP ${resp.status}`)
-        const arrayBuffer = await resp.arrayBuffer()
-        const audioBuffer = await context.decodeAudioData(arrayBuffer)
-        cacheBuffer(songId, audioBuffer)
-      } catch (e) {
-        console.warn('[Player] fetchBuffer failed:', e)
-      } finally {
-        bufferFetchPromises.delete(songId)
+    const controller = new AbortController()
+    bufferFetchControllers.set(cacheKey, controller)
+
+    const work = bufferWorkQueue.then(async (): Promise<AudioBuffer | null> => {
+      if (
+        controller.signal.aborted
+        || playbackRequestId !== requestId
+        || settings.playbackQuality !== quality
+      ) return null
+
+      const url = await resolveSongUrl(song.id, quality)
+      if (
+        !url
+        || controller.signal.aborted
+        || playbackRequestId !== requestId
+        || settings.playbackQuality !== quality
+      ) return null
+
+      const response = await fetch(toProxyUrl(url), { signal: controller.signal })
+      if (!response.ok) throw new Error(`Audio fetch failed with HTTP ${response.status}`)
+
+      const declaredSize = Number(response.headers.get('content-length') || 0)
+      if (declaredSize > MAX_ENCODED_BUFFER_BYTES) {
+        await response.body?.cancel()
+        return null
       }
-    })()
 
-    bufferFetchPromises.set(songId, promise)
-    await promise
-    return getCachedBuffer(songId)
+      let encoded: ArrayBuffer | null = await response.arrayBuffer()
+      if (encoded.byteLength > MAX_ENCODED_BUFFER_BYTES) return null
+      if (
+        controller.signal.aborted
+        || playbackRequestId !== requestId
+        || settings.playbackQuality !== quality
+      ) return null
+
+      const audioBuffer = await getPlaybackContext().decodeAudioData(encoded)
+      encoded = null
+      if (
+        controller.signal.aborted
+        || playbackRequestId !== requestId
+        || settings.playbackQuality !== quality
+      ) return null
+
+      return cacheBuffer(song.id, quality, audioBuffer) ? audioBuffer : null
+    })
+
+    let promise: Promise<AudioBuffer | null>
+    promise = work
+      .catch((error: unknown) => {
+        if (!isAbortError(error)) console.warn('[Player] fetchBuffer failed:', error)
+        return null
+      })
+      .finally(() => {
+        if (bufferFetchPromises.get(cacheKey) === promise) bufferFetchPromises.delete(cacheKey)
+        if (bufferFetchControllers.get(cacheKey) === controller) {
+          bufferFetchControllers.delete(cacheKey)
+        }
+      })
+
+    bufferWorkQueue = promise.then(() => undefined, () => undefined)
+    bufferFetchPromises.set(cacheKey, promise)
+    return promise
   }
 
-  // Pre-fetch next song buffer
-  async function prefetchNextBuffer() {
+  async function prefetchNextBuffer(requestId: number, activeSongId: number) {
+    if (playbackRequestId !== requestId || currentSong.value?.id !== activeSongId) return
     const list = playMode.value === 'shuffle' ? shuffledPlaylist.value : playlist.value
     if (list.length <= 1) return
-    const activeId = currentSong.value?.id
-    const activeIndex = activeId == null ? -1 : list.findIndex((song) => song.id === activeId)
-    const nextIdx = (activeIndex + 1) % list.length
-    const nextSong = list[nextIdx]
-    if (nextSong && !bufferCache.has(nextSong.id)) {
-      await resolveSongUrl(nextSong.id)
-      await fetchBuffer(nextSong.id)
-    }
+    const activeIndex = list.findIndex((song) => song.id === activeSongId)
+    if (activeIndex < 0) return
+    const nextSong = list[(activeIndex + 1) % list.length]
+    if (!nextSong || getCachedBuffer(nextSong.id)) return
+    await fetchBuffer(nextSong, requestId)
+  }
+
+  function scheduleNextBufferPrefetch(delay: number) {
+    if (prefetchTimer !== null) window.clearTimeout(prefetchTimer)
+    const requestId = playbackRequestId
+    const activeSongId = currentSong.value?.id
+    if (activeSongId == null) return
+
+    prefetchTimer = window.setTimeout(() => {
+      prefetchTimer = null
+      void prefetchNextBuffer(requestId, activeSongId)
+    }, delay)
   }
 
   function stopBufferPlayback() {
@@ -265,8 +421,11 @@ export const usePlayerStore = defineStore('player', () => {
     try { source.disconnect() } catch { /* ignore */ }
   }
 
-  function beginPlaybackRequest(): number {
+  function beginPlaybackRequest(songId: number): number {
     playbackRequestId += 1
+    cancelMetadataWait?.()
+    cancelPendingBufferWork()
+    clearCachedBuffers(songId)
     stopBufferPlayback()
     mediaSongId = null
     audio.pause()
@@ -281,6 +440,68 @@ export const usePlayerStore = defineStore('player', () => {
 
   function isPlaybackRequestCurrent(requestId: number, song: Song): boolean {
     return playbackRequestId === requestId && currentSong.value?.id === song.id
+  }
+
+  function waitForMediaMetadata(requestId: number, song: Song): Promise<void> {
+    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) return Promise.resolve()
+
+    return new Promise((resolve) => {
+      let timeoutId = 0
+      const finish = () => {
+        window.clearTimeout(timeoutId)
+        audio.removeEventListener('loadedmetadata', finish)
+        audio.removeEventListener('error', finish)
+        if (cancelMetadataWait === finish) cancelMetadataWait = null
+        resolve()
+      }
+      cancelMetadataWait = finish
+      timeoutId = window.setTimeout(finish, 10_000)
+      audio.addEventListener('loadedmetadata', finish)
+      audio.addEventListener('error', finish)
+
+      if (!isPlaybackRequestCurrent(requestId, song)) finish()
+    })
+  }
+
+  async function playMediaElement(
+    song: Song,
+    url: string,
+    requestId: number,
+    startOffset = 0,
+    autoplay = true,
+  ) {
+    mediaSongId = song.id
+    audio.src = toProxyUrl(url)
+    audio.load()
+
+    if (startOffset > 0) {
+      await waitForMediaMetadata(requestId, song)
+      if (!isPlaybackRequestCurrent(requestId, song)) return
+      try {
+        const maxTime = Number.isFinite(audio.duration) && audio.duration > 0
+          ? Math.max(0, audio.duration - 0.05)
+          : startOffset
+        audio.currentTime = Math.min(startOffset, maxTime)
+        currentTime.value = audio.currentTime
+      } catch {
+        currentTime.value = startOffset
+      }
+    }
+
+    if (!autoplay) {
+      isPlaying.value = false
+      return
+    }
+
+    await resumeAudioEngine()
+    if (!isPlaybackRequestCurrent(requestId, song)) return
+    try {
+      await audio.play()
+    } catch (error) {
+      if (!isPlaybackRequestCurrent(requestId, song)) return
+      isPlaying.value = false
+      console.warn('[Player] playback start was blocked:', error)
+    }
   }
 
   // Play via WebAudio buffer (gapless)
@@ -317,7 +538,14 @@ export const usePlayerStore = defineStore('player', () => {
     source.onended = () => {
       if (gaplessSongId === song.id && !isSeeking) {
         cancelAnimationFrame(animId)
+        source.onended = null
+        try { source.disconnect() } catch { /* ignore */ }
+        if (currentSource === source) currentSource = null
         gaplessSongId = null
+        if (playMode.value === 'single') {
+          playBuffer(song, buffer)
+          return
+        }
         next()
       }
     }
@@ -336,35 +564,24 @@ export const usePlayerStore = defineStore('player', () => {
     if (!isPlaybackRequestCurrent(requestId, song)) return
 
     // Try to use pre-fetched buffer for seamless playback
-    const buffer = getCachedBuffer(song.id)
+    const buffer = takeCachedBuffer(song.id)
     if (buffer) {
       playBuffer(song, buffer)
-      window.setTimeout(() => { void prefetchNextBuffer() }, 500)
+      scheduleNextBufferPrefetch(500)
       return
     }
 
     // Fallback: the media element is permanently attached to the same analyser.
-    mediaSongId = song.id
-    audio.src = toProxyUrl(url)
-    audio.load()
-    try {
-      await audio.play()
-    } catch (e) {
-      if (!isPlaybackRequestCurrent(requestId, song)) return
-      isPlaying.value = false
-      console.warn('[Player] playback start was blocked:', e)
+    await playMediaElement(song, url, requestId)
+    if (isPlaybackRequestCurrent(requestId, song) && isPlaying.value) {
+      scheduleNextBufferPrefetch(500)
     }
-
-    // Fetch buffer in background for gapless transition next time
-    void fetchBuffer(song.id).then(() => {
-      if (isPlaybackRequestCurrent(requestId, song)) void prefetchNextBuffer()
-    })
   }
 
   async function loadAndPlay(song: Song) {
     // Resume while the user gesture is still active; URL lookup may complete later.
     void resumeAudioEngine()
-    const requestId = beginPlaybackRequest()
+    const requestId = beginPlaybackRequest(song.id)
     isLoading.value = true
     lyrics.value = []
     try {
@@ -381,6 +598,30 @@ export const usePlayerStore = defineStore('player', () => {
     }
   }
 
+  async function reloadCurrentSongForQuality(
+    song: Song,
+    startOffset: number,
+    autoplay: boolean,
+  ) {
+    const requestId = beginPlaybackRequest(song.id)
+    isLoading.value = true
+    try {
+      const url = await resolveSongUrl(song.id)
+      if (!isPlaybackRequestCurrent(requestId, song)) return
+      if (!url) throw new Error(`No playable URL for song ${song.id}`)
+      await playMediaElement(song, url, requestId, startOffset, autoplay)
+      if (isPlaybackRequestCurrent(requestId, song) && autoplay && isPlaying.value) {
+        scheduleNextBufferPrefetch(500)
+      }
+    } catch (error) {
+      if (isPlaybackRequestCurrent(requestId, song)) {
+        console.error('[Player] quality reload error:', error)
+      }
+    } finally {
+      if (isPlaybackRequestCurrent(requestId, song)) isLoading.value = false
+    }
+  }
+
   function setPlaylist(songs: Song[], index = 0) {
     playlist.value = songs
     currentIndex.value = index
@@ -391,7 +632,6 @@ export const usePlayerStore = defineStore('player', () => {
     if (songs[index]) {
       void loadAndPlay(songs[index])
     }
-    window.setTimeout(() => { void prefetchNextBuffer() }, 2000)
   }
 
   function appendToPlaylist(songs: Song[]) {
@@ -441,7 +681,9 @@ export const usePlayerStore = defineStore('player', () => {
     const song = currentSong.value
     if (!song) return
 
-    const buffer = getCachedBuffer(song.id)
+    const buffer = gaplessSongId === song.id && currentSource?.buffer
+      ? currentSource.buffer
+      : takeCachedBuffer(song.id)
     if (buffer) {
       playBuffer(song, buffer)
       audio.pause()
@@ -492,7 +734,7 @@ export const usePlayerStore = defineStore('player', () => {
     if (gaplessSongId && currentSource) {
       // Seek in gapless mode: restart buffer at new position
       isSeeking = true
-      const buffer = getCachedBuffer(gaplessSongId)
+      const buffer = currentSource.buffer
       const song = currentSong.value
       if (song && buffer) {
         playBuffer(song, buffer, t)
@@ -615,6 +857,22 @@ export const usePlayerStore = defineStore('player', () => {
 
   attachMediaElement(audio)
   setAudioOutputVolume(volume.value, true)
+  watch(
+    () => settings.playbackQuality,
+    () => {
+      const song = currentSong.value
+      const startOffset = currentTime.value
+      const autoplay = isPlaying.value
+
+      // URL and decoded PCM caches are quality-specific. Drop them before the
+      // reload so an old 320 kbps request cannot win after selecting lossless.
+      urlCache.clear()
+      cancelPendingBufferWork()
+      clearCachedBuffers()
+
+      if (song) void reloadCurrentSongForQuality(song, startOffset, autoplay)
+    },
+  )
   restoreState()
 
   return {

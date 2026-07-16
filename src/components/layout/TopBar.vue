@@ -17,6 +17,7 @@ import {
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { getSearchDefault } from '@/lib/api'
+import { getDisplayThumbnailUrl } from '@/lib/image'
 import logoUrl from '@/assets/logo.png'
 
 const router = useRouter()
@@ -159,7 +160,8 @@ function winClose() {
         >
           <img
             v-if="auth.isLoggedIn && auth.profile?.avatarUrl"
-            :src="auth.profile.avatarUrl"
+            :src="getDisplayThumbnailUrl(auth.profile.avatarUrl, 32)"
+            decoding="async"
             class="w-full h-full object-cover"
           />
           <span v-else class="text-xs font-medium text-muted-foreground">?</span>

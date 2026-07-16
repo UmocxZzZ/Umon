@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
-import type { ThemeMode } from '@/types'
+import type { AudioQuality, ThemeMode } from '@/types'
+import { normalizeAudioQuality } from '@/lib/audioQuality'
 import {
   normalizeElectronApiBase,
   syncElectronAuthSession,
@@ -13,6 +14,9 @@ export const useSettingsStore = defineStore('settings', () => {
 
   const apiBase = ref(localStorage.getItem('umon-api-base') || '')
   const downloadDir = ref(localStorage.getItem('umon-download-dir') || '')
+  const playbackQuality = ref<AudioQuality>(
+    normalizeAudioQuality(localStorage.getItem('umon-playback-quality')),
+  )
 
   // Initialize default download path from system
   if (!localStorage.getItem('umon-download-dir') && window.electronAPI?.getDownloadPath) {
@@ -52,6 +56,10 @@ export const useSettingsStore = defineStore('settings', () => {
     downloadDir.value = path
   }
 
+  function setPlaybackQuality(quality: AudioQuality) {
+    playbackQuality.value = quality
+  }
+
   watch(theme, (val) => {
     localStorage.setItem('umon-theme', val)
     document.documentElement.classList.toggle('dark', val === 'dark')
@@ -61,9 +69,14 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem('umon-download-dir', val)
   })
 
+  watch(playbackQuality, (val) => {
+    localStorage.setItem('umon-playback-quality', val)
+  })
+
   return {
     theme, toggleTheme, setTheme,
     apiBase, setApiBase,
     downloadDir, setDownloadDir,
+    playbackQuality, setPlaybackQuality,
   }
 })

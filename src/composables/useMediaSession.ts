@@ -94,6 +94,7 @@ export function useMediaSession() {
 
   // Aggressive restore during song loading
   let restoreTimer: ReturnType<typeof setInterval> | null = null
+  let restoreTimeout: ReturnType<typeof setTimeout> | null = null
   let forceTimer: ReturnType<typeof setInterval> | null = null
 
   function startRestore() {
@@ -101,17 +102,15 @@ export function useMediaSession() {
     ensureSilentAudio()
     updateMetadata()
 
-    // Aggressively force playing state every 30ms during loading
+    // Keep SMTC alive while the new source is loading, but do not rebuild
+    // MediaMetadata in a tight loop (that previously allocated hundreds of
+    // artwork descriptors per song change).
     restoreTimer = setInterval(() => {
-      updateMetadata()
       forcePlayingState()
-      if (player.isPlaying && player.audio.readyState >= 3) {
-        stopRestore()
-      }
-    }, 30)
+      if (player.isPlaying) stopRestore()
+    }, 250)
 
-    // Safety timeout
-    setTimeout(stopRestore, 8000)
+    restoreTimeout = setTimeout(stopRestore, 4000)
   }
 
   function stopRestore() {
@@ -119,38 +118,33 @@ export function useMediaSession() {
       clearInterval(restoreTimer)
       restoreTimer = null
     }
+    if (restoreTimeout) {
+      clearTimeout(restoreTimeout)
+      restoreTimeout = null
+    }
   }
 
-  // Watch song changes
-  watch(() => player.currentIndex, () => {
-    startRestore()
-  })
-
-  // Also watch currentSong (for first song load)
-  watch(() => player.currentSong, (song) => {
-    if (song) {
-      startRestore()
-    }
-  })
+  watch(() => player.currentSong?.id, (songId) => {
+    if (songId != null) startRestore()
+  }, { immediate: true })
 
   // Keep forcing playing state
   watch(() => player.isPlaying, () => {
     forcePlayingState()
-  })
-
-  watch(() => player.currentTime, () => {
     updatePositionState()
   })
 
   // Setup
   setupActionHandlers()
 
-  // Start a persistent timer that keeps forcing playing state
+  // One low-frequency heartbeat replaces per-frame position updates and the
+  // previous 100ms state loop.
   forceTimer = setInterval(() => {
     if ('mediaSession' in navigator) {
       navigator.mediaSession.playbackState = 'playing'
+      updatePositionState()
     }
-  }, 100)
+  }, 1000)
 
   // Try to start silent audio on user interaction
   const startOnInteraction = () => {

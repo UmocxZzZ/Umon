@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Settings, HardDrive, Info, ExternalLink, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { Settings, AudioLines, HardDrive, Info, ExternalLink, RefreshCw, Trash2 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import { usePlaylistCacheStore } from '@/stores/playlistCache'
 import { useToast } from '@/composables/useToast'
+import { AUDIO_QUALITY_OPTIONS } from '@/lib/audioQuality'
+import type { AudioQuality } from '@/types'
 import logoUrl from '@/assets/logo.png'
 
 const version = __APP_VERSION__
@@ -49,6 +51,12 @@ function clearCache() {
   playlistCache.clearAll()
   toast.showToast('缓存已清除')
 }
+
+function selectPlaybackQuality(quality: AudioQuality) {
+  if (settings.playbackQuality === quality) return
+  settings.setPlaybackQuality(quality)
+  toast.showToast('在线播放音质已切换')
+}
 </script>
 
 <template>
@@ -82,6 +90,31 @@ function clearCache() {
       </div>
       <p class="text-xs text-muted-foreground">
         留空使用构建时的默认地址，保存后立即生效。
+      </p>
+    </section>
+
+    <!-- Online playback quality -->
+    <section class="bg-card rounded-xl border border-border p-5 space-y-3">
+      <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+        <AudioLines :size="14" />
+        在线播放音质
+      </h2>
+      <div class="grid grid-cols-2 gap-2">
+        <button
+          v-for="option in AUDIO_QUALITY_OPTIONS"
+          :key="option.value"
+          class="px-3 py-2 rounded-lg text-left text-xs border transition-colors"
+          :class="settings.playbackQuality === option.value
+            ? 'border-primary bg-primary/10 text-primary'
+            : 'border-border hover:border-primary/50'"
+          @click="selectPlaybackQuality(option.value)"
+        >
+          <span class="font-medium">{{ option.label }}</span>
+          <span class="text-muted-foreground ml-1">{{ option.description }}</span>
+        </button>
+      </div>
+      <p class="text-xs text-muted-foreground">
+        默认使用极高音质。切换后会重新加载当前歌曲，并应用于后续预加载。
       </p>
     </section>
 

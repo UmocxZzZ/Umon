@@ -41,6 +41,7 @@ export interface Album {
   name: string
   artist: string
   cover: string
+  publishTime?: number
 }
 
 export interface LyricLine {
@@ -60,6 +61,8 @@ export interface Comment {
 export type PlayMode = 'single' | 'list' | 'shuffle'
 
 export type ThemeMode = 'light' | 'dark'
+
+export type AudioQuality = 'standard' | 'higher' | 'exhigh' | 'lossless'
 
 // Raw API types
 export interface RawTrack {

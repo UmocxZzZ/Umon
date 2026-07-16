@@ -20,7 +20,8 @@ const renderer = shallowRef<THREE.WebGLRenderer | null>(null)
 const scene = shallowRef<THREE.Scene | null>(null)
 const camera = shallowRef<THREE.PerspectiveCamera | null>(null)
 const material = shallowRef<THREE.ShaderMaterial | null>(null)
-const animFrameId = ref(0)
+const geometry = shallowRef<THREE.BoxGeometry | null>(null)
+let animFrameId = 0
 
 const GRID_SIZE = 120
 const SPACING = 1.05
@@ -65,10 +66,10 @@ function setupScene(canvas: HTMLCanvasElement) {
   const r = new THREE.WebGLRenderer({
     canvas,
     alpha: false,
-    antialias: true,
+    antialias: window.devicePixelRatio <= 1.5,
   })
   r.setSize(width, height)
-  r.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  r.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
   r.setClearColor(bgColor, 1)
   renderer.value = r
 
@@ -92,6 +93,7 @@ function setupScene(canvas: HTMLCanvasElement) {
   material.value = mat
 
   const geo = new THREE.BoxGeometry(0.9, 1, 0.9)
+  geometry.value = geo
   const mesh = new THREE.InstancedMesh(geo, mat, COUNT)
 
   const tempMatrix = new THREE.Matrix4()
@@ -118,7 +120,7 @@ function setupScene(canvas: HTMLCanvasElement) {
   const parentEl = canvas.parentElement
 
   function animate() {
-    animFrameId.value = requestAnimationFrame(animate)
+    animFrameId = requestAnimationFrame(animate)
 
     const w = parentEl?.clientWidth || window.innerWidth
     const h = parentEl?.clientHeight || window.innerHeight
@@ -192,9 +194,28 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  cancelAnimationFrame(animFrameId.value)
-  renderer.value?.dispose()
+  cancelAnimationFrame(animFrameId)
+  geometry.value?.dispose()
   material.value?.dispose()
+  scene.value?.clear()
+
+  const activeRenderer = renderer.value
+  if (activeRenderer) {
+    activeRenderer.renderLists.dispose()
+    activeRenderer.dispose()
+    activeRenderer.forceContextLoss()
+  }
+
+  if (canvasRef.value) {
+    canvasRef.value.width = 1
+    canvasRef.value.height = 1
+  }
+
+  geometry.value = null
+  material.value = null
+  scene.value = null
+  camera.value = null
+  renderer.value = null
 })
 </script>
 

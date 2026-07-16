@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, triggerRef } from 'vue'
-import type { Song } from '@/types'
-import { getSongUrl } from '@/lib/api'
+import type { AudioQuality, Song } from '@/types'
+import { getSongUrlInfo } from '@/lib/api'
+import { DEFAULT_AUDIO_QUALITY, normalizeAudioQuality } from '@/lib/audioQuality'
 import { useSettingsStore } from './settings'
 
 export interface DownloadItem {
@@ -15,6 +16,7 @@ export interface DownloadItem {
   speed: number
   timestamp: number
   url?: string
+  quality: AudioQuality
 }
 
 interface StoredItem {
@@ -23,6 +25,7 @@ interface StoredItem {
   filePath: string
   fileName: string
   timestamp: number
+  quality?: AudioQuality
 }
 
 const STORAGE_KEY = 'umon-downloads'
@@ -34,6 +37,7 @@ function loadItems(): DownloadItem[] {
     const stored: StoredItem[] = JSON.parse(raw)
     return stored.map((s) => ({
       ...s,
+      quality: normalizeAudioQuality(s.quality),
       progress: s.status === 'done' ? 100 : 0,
       downloaded: 0,
       totalSize: 0,
@@ -45,14 +49,22 @@ function loadItems(): DownloadItem[] {
 }
 
 function saveItems(items: DownloadItem[]) {
-  const stored: StoredItem[] = items.map(({ song, status, filePath, fileName, timestamp }) => ({
-    song, status, filePath, fileName, timestamp,
+  const stored: StoredItem[] = items.map(({ song, status, filePath, fileName, timestamp, quality }) => ({
+    song, status, filePath, fileName, timestamp, quality,
   }))
   localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
 }
 
 function sanitizeFileName(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, '_')
+}
+
+function getAudioExtension(format: string | null, quality: AudioQuality): string {
+  const normalized = format?.toLowerCase().replace(/[^a-z0-9]/g, '')
+  if (normalized === 'flac' || normalized === 'mp3' || normalized === 'm4a') {
+    return `.${normalized}`
+  }
+  return quality === 'lossless' ? '.flac' : '.mp3'
 }
 
 let progressListenerRegistered = false
@@ -103,15 +115,18 @@ export const useDownloadsStore = defineStore('downloads', () => {
     return items.value.find((d) => d.song.id === songId)
   }
 
-  async function downloadSong(song: Song, _quality: string = 'exhigh'): Promise<void> {
+  async function downloadSong(
+    song: Song,
+    quality: AudioQuality = DEFAULT_AUDIO_QUALITY,
+  ): Promise<void> {
     if (isDownloaded(song.id)) return
 
     // Remove existing entry (missing/error) to avoid duplicates
     items.value = items.value.filter((d) => d.song.id !== song.id)
 
     const settings = useSettingsStore()
-    const ext = _quality === 'lossless' ? '.flac' : '.mp3'
-    const fileName = sanitizeFileName(`${song.artist} - ${song.name}${ext}`)
+    const fallbackExt = quality === 'lossless' ? '.flac' : '.mp3'
+    const fileName = sanitizeFileName(`${song.artist} - ${song.name}${fallbackExt}`)
 
     const item: DownloadItem = {
       song,
@@ -123,23 +138,27 @@ export const useDownloadsStore = defineStore('downloads', () => {
       totalSize: 0,
       speed: 0,
       timestamp: Date.now(),
+      quality,
     }
     items.value.unshift(item)
     saveItems(items.value)
 
     try {
-      const url = await getSongUrl(song.id)
-      if (!url) {
+      const songUrl = await getSongUrlInfo(song.id, quality)
+      if (!songUrl.url) {
         item.status = 'error'
         saveItems(items.value)
         return
       }
-      item.url = url
+      const actualExt = getAudioExtension(songUrl.type, quality)
+      item.fileName = sanitizeFileName(`${song.artist} - ${song.name}${actualExt}`)
+      item.url = songUrl.url
+      const url = songUrl.url
 
       if (window.electronAPI?.downloadFile) {
         const result = await window.electronAPI.downloadFile({
           url,
-          fileName,
+          fileName: item.fileName,
           songId: song.id,
           downloadDir: settings.downloadDir,
         })
@@ -159,7 +178,7 @@ export const useDownloadsStore = defineStore('downloads', () => {
       } else {
         const a = document.createElement('a')
         a.href = url
-        a.download = fileName
+        a.download = item.fileName
         a.target = '_blank'
         document.body.appendChild(a)
         a.click()
@@ -282,7 +301,7 @@ export const useDownloadsStore = defineStore('downloads', () => {
     item.downloaded = 0
     item.speed = 0
     item.timestamp = Date.now()
-    await downloadSong(item.song)
+    await downloadSong(item.song, item.quality)
   }
 
   function removeItem(songId: number) {

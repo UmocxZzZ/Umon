@@ -3,7 +3,9 @@ import { ref, computed } from 'vue'
 import { X, Download, HardDrive } from 'lucide-vue-next'
 import { useDownloadsStore } from '@/stores/downloads'
 import { useSettingsStore } from '@/stores/settings'
-import type { Song } from '@/types'
+import { AUDIO_QUALITY_OPTIONS } from '@/lib/audioQuality'
+import { getDisplayThumbnailUrl } from '@/lib/image'
+import type { AudioQuality, Song } from '@/types'
 
 const props = defineProps<{
   song: Song
@@ -18,14 +20,7 @@ const downloads = useDownloadsStore()
 const settings = useSettingsStore()
 
 const isElectron = computed(() => !!window.electronAPI)
-const quality = ref('exhigh')
-
-const qualityOptions = [
-  { value: 'standard', label: '标准', desc: '128kbps' },
-  { value: 'higher', label: '较高', desc: '192kbps' },
-  { value: 'exhigh', label: '极高', desc: '320kbps' },
-  { value: 'lossless', label: '无损', desc: 'FLAC' },
-]
+const quality = ref<AudioQuality>(settings.playbackQuality)
 
 function handleDownload() {
   downloads.downloadSong(props.song, quality.value)
@@ -70,7 +65,8 @@ async function selectFolder() {
           <div class="flex items-center gap-3">
             <img
               v-if="song.cover"
-              :src="song.cover"
+              :src="getDisplayThumbnailUrl(song.cover, 48)"
+              decoding="async"
               class="w-12 h-12 rounded-lg object-cover"
             />
             <div class="min-w-0">
@@ -84,7 +80,7 @@ async function selectFolder() {
             <p class="text-xs text-muted-foreground mb-2">音质选择</p>
             <div class="grid grid-cols-2 gap-2">
               <button
-                v-for="opt in qualityOptions"
+                v-for="opt in AUDIO_QUALITY_OPTIONS"
                 :key="opt.value"
                 class="px-3 py-2 rounded-lg text-xs border transition-colors"
                 :class="quality === opt.value
@@ -93,7 +89,7 @@ async function selectFolder() {
                 @click="quality = opt.value"
               >
                 <span class="font-medium">{{ opt.label }}</span>
-                <span class="text-muted-foreground ml-1">{{ opt.desc }}</span>
+                <span class="text-muted-foreground ml-1">{{ opt.description }}</span>
               </button>
             </div>
           </div>

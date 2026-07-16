@@ -24,6 +24,7 @@ import { useSongNavigate } from '@/lib/navigate'
 import ArtistLinks from '@/components/ArtistLinks.vue'
 import ProgressBar from '@/components/layout/ProgressBar.vue'
 import VolumeBar from '@/components/layout/VolumeBar.vue'
+import { getDisplayThumbnailUrl } from '@/lib/image'
 import type { PlayMode } from '@/types'
 
 const player = usePlayerStore()
@@ -77,7 +78,8 @@ const playModeLabel = computed(() => {
         >
           <img
             v-if="player.currentSong?.cover"
-            :src="player.currentSong.cover"
+            :src="getDisplayThumbnailUrl(player.currentSong.cover, 48)"
+            decoding="async"
             class="w-full h-full object-cover"
           />
           <div v-else class="w-full h-full flex items-center justify-center text-muted-foreground">

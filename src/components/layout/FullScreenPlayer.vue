@@ -7,6 +7,7 @@ import { getHotComments } from '@/lib/api'
 import { useSongNavigate } from '@/lib/navigate'
 import ArtistLinks from '@/components/ArtistLinks.vue'
 import MapScene from '@/components/visualizer/MapScene.vue'
+import { getDisplayThumbnailUrl } from '@/lib/image'
 import type { Comment } from '@/types'
 
 const route = useRoute()
@@ -177,7 +178,8 @@ watch(
             >
               <img
                 v-if="player.currentSong?.cover"
-                :src="player.currentSong.cover"
+                :src="getDisplayThumbnailUrl(player.currentSong.cover, 256)"
+                decoding="async"
                 class="rounded-full object-cover"
                 style="width: 65%; height: 65%;"
               />
@@ -246,7 +248,8 @@ watch(
           <div class="flex flex-col items-center gap-3 pt-8 pb-6 shrink-0">
             <img
               v-if="player.currentSong?.cover"
-              :src="player.currentSong.cover"
+              :src="getDisplayThumbnailUrl(player.currentSong.cover, 96)"
+              decoding="async"
               class="w-24 h-24 rounded-xl object-cover shadow-lg"
             />
             <div v-else class="w-24 h-24 rounded-xl bg-muted flex items-ce
@@ -295,7 +298,9 @@ watch(
                 class="flex gap-3"
               >
                 <img
-                  :src="c.avatar"
+                  :src="getDisplayThumbnailUrl(c.avatar, 40)"
+                  loading="lazy"
+                  decoding="async"
                   class="w-10 h-10 rounded-full object-cover shrink-0"
                 />
                 <div class="flex-1 min-w-0">

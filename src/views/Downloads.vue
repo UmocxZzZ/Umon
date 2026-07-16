@@ -5,6 +5,7 @@ import { usePlayerStore } from '@/stores/player'
 import { useLikesStore } from '@/stores/likes'
 import { useDownloadsStore } from '@/stores/downloads'
 import DownloadDialog from '@/components/DownloadDialog.vue'
+import LazySongCover from '@/components/LazySongCover.vue'
 import type { DownloadItem } from '@/stores/downloads'
 import type { Song } from '@/types'
 
@@ -163,11 +164,7 @@ function onRedownloadClose() {
                 :key="item.song.id"
                 class="flex items-center gap-3 px-4 py-2.5 hover:bg-accent/50 transition-colors"
               >
-                <img
-                  v-if="item.song.cover"
-                  :src="item.song.cover"
-                  class="w-8 h-8 rounded object-cover shrink-0"
-                />
+                <LazySongCover :src="item.song.cover" :alt="item.song.name" />
                 <div class="flex-1 min-w-0">
                   <p class="text-xs font-medium truncate">{{ item.song.name }}</p>
                   <div class="flex items-center gap-2 mt-1">
@@ -244,10 +241,9 @@ function onRedownloadClose() {
         :key="item.song.id"
         class="flex items-center gap-4 px-4 py-3 hover:bg-accent transition-colors"
       >
-        <img
-          v-if="item.song.cover"
+        <LazySongCover
           :src="item.song.cover"
-          class="w-10 h-10 rounded object-cover"
+          :alt="item.song.name"
           :class="{ 'opacity-40': item.status === 'missing' || item.status === 'error' }"
         />
         <div class="flex-1 min-w-0">

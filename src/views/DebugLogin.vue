@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { Loader2, RefreshCw, CheckCircle } from 'lucide-vue-next'
 import { getQrKey, createQrCode, checkQrStatus } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
+import { getDisplayThumbnailUrl } from '@/lib/image'
 
 const auth = useAuthStore()
 
@@ -132,7 +133,11 @@ onUnmounted(stopPolling)
       <div v-if="auth.isLoggedIn && auth.profile" class="p-3 bg-accent rounded-lg text-left">
         <p class="text-xs text-muted-foreground mb-1">当前登录用户：</p>
         <div class="flex items-center gap-2">
-          <img :src="auth.profile.avatarUrl" class="w-8 h-8 rounded-full" />
+          <img
+            :src="getDisplayThumbnailUrl(auth.profile.avatarUrl, 32)"
+            decoding="async"
+            class="w-8 h-8 rounded-full"
+          />
           <div>
             <p class="text-sm font-medium">{{ auth.profile.nickname }}</p>
             <p class="text-xs text-muted-foreground">UID: {{ auth.profile.userId }}</p>

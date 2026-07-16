@@ -5,6 +5,8 @@ import { useRouter } from 'vue-router'
 import { usePlayerStore } from '@/stores/player'
 import { formatTime } from '@/lib/utils'
 import { getPersonalized, getNewSongs } from '@/lib/api'
+import LazySongCover from '@/components/LazySongCover.vue'
+import { getDisplayThumbnailUrl } from '@/lib/image'
 import type { Song, Playlist } from '@/types'
 
 const router = useRouter()
@@ -75,8 +77,10 @@ function formatCount(n: number): string {
                         group-hover:ring-2 group-hover:ring-primary/30 transition-all relative">
               <img
                 v-if="pl.cover"
-                :src="pl.cover"
+                :src="getDisplayThumbnailUrl(pl.cover, 240)"
                 :alt="pl.name"
+                loading="lazy"
+                decoding="async"
                 class="w-full h-full object-cover"
               />
               <div v-else class="w-full h-full flex items-center justify-center">
@@ -112,11 +116,7 @@ function formatCount(n: number): string {
             <span class="w-8 text-center text-sm text-muted-foreground">
               {{ String(i + 1).padStart(2, '0') }}
             </span>
-            <img
-              v-if="song.cover"
-              :src="song.cover"
-              class="w-10 h-10 rounded object-cover"
-            />
+            <LazySongCover :src="song.cover" :alt="song.name" />
             <div class="flex-1 min-w-0">
               <p class="text-sm font-medium truncate">{{ song.name }}</p>
               <p class="text-xs text-muted-foreground truncate">{{ song.artist }}</p>

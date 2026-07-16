@@ -1,5 +1,15 @@
 import api from './axios'
-import type { Song, Playlist, LyricLine, Comment, RawTrack, RawPlaylistDetail } from '@/types'
+import type {
+  AudioQuality,
+  Album,
+  Song,
+  Playlist,
+  LyricLine,
+  Comment,
+  RawTrack,
+  RawPlaylistDetail,
+} from '@/types'
+import { DEFAULT_AUDIO_QUALITY } from '@/lib/audioQuality'
 import type { UserProfile } from '@/stores/auth'
 
 export function transformTrack(track: RawTrack): Song {
@@ -84,11 +94,32 @@ export async function getPlaylistDetail(id: number): Promise<{
   }
 }
 
-export async function getSongUrl(id: number): Promise<string | null> {
+export interface SongUrlInfo {
+  url: string | null
+  type: string | null
+  level: string | null
+}
+
+export async function getSongUrlInfo(
+  id: number,
+  quality: AudioQuality = DEFAULT_AUDIO_QUALITY,
+): Promise<SongUrlInfo> {
   const res = (await api.get('/song/url/v1', {
-    params: { id, level: 'exhigh' },
-  })) as { data: { url: string | null }[] }
-  return res.data[0]?.url ?? null
+    params: { id, level: quality },
+  })) as { data: { url?: string | null; type?: string | null; level?: string | null }[] }
+  const data = res.data[0]
+  return {
+    url: data?.url ?? null,
+    type: data?.type ?? null,
+    level: data?.level ?? null,
+  }
+}
+
+export async function getSongUrl(
+  id: number,
+  quality: AudioQuality = DEFAULT_AUDIO_QUALITY,
+): Promise<string | null> {
+  return (await getSongUrlInfo(id, quality)).url
 }
 
 export async function getLyric(id: number): Promise<LyricLine[]> {
@@ -217,6 +248,65 @@ export async function getArtistDetail(id: number): Promise<{ name: string; cover
     cover: res.artist.picUrl,
     songs: res.hotSongs.map(transformTrack),
   }
+}
+
+export interface ArtistAlbumPage {
+  albums: Album[]
+  more: boolean
+}
+
+export async function getArtistAlbums(
+  id: number,
+  limit = 24,
+  offset = 0,
+): Promise<ArtistAlbumPage> {
+  const res = (await api.get('/artist/album', {
+    params: { id, limit, offset },
+  })) as {
+    hotAlbums?: Array<{
+      id: number
+      name: string
+      picUrl?: string
+      publishTime?: number
+      artist?: { name?: string }
+    }>
+    more?: boolean
+  }
+  const hotAlbums = res.hotAlbums ?? []
+
+  return {
+    albums: hotAlbums.map((album) => ({
+      id: album.id,
+      name: album.name,
+      artist: album.artist?.name ?? '',
+      cover: album.picUrl ?? '',
+      publishTime: album.publishTime,
+    })),
+    more: typeof res.more === 'boolean' ? res.more : hotAlbums.length === limit,
+  }
+}
+
+export async function getAllArtistAlbums(id: number, batchSize = 50): Promise<Album[]> {
+  const albums: Album[] = []
+  const albumIds = new Set<number>()
+  let offset = 0
+
+  // The endpoint is paged, but the UI intentionally exposes a complete list
+  // like the hot-song list. Stop on an empty/duplicate page as protection for
+  // older API implementations that ignore offset.
+  for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+    const page = await getArtistAlbums(id, batchSize, offset)
+    const newAlbums = page.albums.filter((album) => !albumIds.has(album.id))
+    for (const album of newAlbums) {
+      albumIds.add(album.id)
+      albums.push(album)
+    }
+
+    if (!page.more || page.albums.length === 0 || newAlbums.length === 0) break
+    offset += page.albums.length
+  }
+
+  return albums
 }
 
 export async function getAlbumDetail(id: number): Promise<{ name: string; artist: string; cover: string; songs: Song[] }> {
