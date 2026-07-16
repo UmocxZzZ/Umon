@@ -43,7 +43,7 @@ const { goAlbum } = useSongNavigate()
           :key="song.id"
           class="flex items-center gap-3 px-4 py-2 hover:bg-accent cursor-pointer transition-colors"
           :class="{ 'bg-accent': i === player.currentIndex }"
-          @click="player.setPlaylist(player.playlist, i); player.play()"
+          @click="player.setPlaylist(player.playlist, i)"
         >
           <div class="flex-1 min-w-0">
             <button

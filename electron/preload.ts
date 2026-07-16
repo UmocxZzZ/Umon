@@ -28,10 +28,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('get-download-path'),
   checkUpdate: () =>
     ipcRenderer.invoke('check-update'),
-  setCookie: (cookie: string) =>
-    ipcRenderer.invoke('set-cookie', cookie),
-  clearCookies: () =>
-    ipcRenderer.invoke('clear-cookies'),
-  getStoredCookie: () =>
-    ipcRenderer.invoke('get-stored-cookie'),
+  configureAuthSession: (data: { cookie: string; apiBase: string }) =>
+    ipcRenderer.invoke('configure-auth-session', data),
 })

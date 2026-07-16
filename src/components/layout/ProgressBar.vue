@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { usePlayerStore } from '@/stores/player'
 import { useDrag } from '@/composables/useDrag'
 import { formatTime } from '@/lib/utils'
@@ -28,16 +28,6 @@ const tooltipLeft = computed(() => {
   const ratio = isDragging.value ? dragRatio.value : hoverRatio.value
   return `${ratio * 100}%`
 })
-
-// Buffer progress
-const bufferProgress = ref(0)
-watch(() => player.audio, (audio) => {
-  audio.addEventListener('progress', () => {
-    if (audio.buffered.length > 0) {
-      bufferProgress.value = audio.buffered.end(audio.buffered.length - 1) / audio.duration
-    }
-  })
-}, { immediate: true })
 
 // Drag handling
 const { bindEvents } = useDrag(containerRef, {
@@ -82,9 +72,10 @@ onMounted(() => {
 
     <!-- Buffer progress -->
     <div
+      data-testid="buffer-progress"
       class="absolute top-0 left-0 h-1 rounded-full bg-muted-foreground/20 transition-all duration-150 group-hover:h-1.5"
       :class="{ 'h-1.5': isDragging }"
-      :style="{ width: `${bufferProgress * 100}%` }"
+      :style="{ width: `${player.bufferedProgress * 100}%` }"
     />
 
     <!-- Played progress -->

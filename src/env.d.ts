@@ -23,8 +23,6 @@ interface Window {
     selectFolder: () => Promise<string | null>
     getDownloadPath: () => Promise<string>
     checkUpdate: () => Promise<{ hasUpdate: boolean; latestVersion?: string; currentVersion: string }>
-    setCookie: (cookieStr: string) => Promise<void>
-    clearCookies: () => Promise<void>
-    getStoredCookie: () => Promise<string>
+    configureAuthSession: (data: { cookie: string; apiBase: string }) => Promise<void>
   }
 }

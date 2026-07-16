@@ -19,6 +19,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   getDownloadPath: () => ipcRenderer.invoke('get-download-path'),
   checkUpdate: () => ipcRenderer.invoke('check-update'),
-  setCookie: (cookieStr) => ipcRenderer.invoke('set-cookie', cookieStr),
-  clearCookies: () => ipcRenderer.invoke('clear-cookies'),
+  configureAuthSession: (data) => ipcRenderer.invoke('configure-auth-session', data),
 })

@@ -69,7 +69,7 @@ function onSearch() {
 
 function handleLogout() {
   showMenu.value = false
-  auth.logout()
+  void auth.logout()
 }
 
 function onDocClick(e: MouseEvent) {

@@ -17,8 +17,8 @@ export function transformTrack(track: RawTrack): Song {
 }
 
 export async function getPersonalized(limit = 8): Promise<Playlist[]> {
-  const res = (await api.get('/personalized')) as { result: Record<string, unknown>[] }
-  return res.result.slice(0, limit).map((item) => ({
+  const res = (await api.get('/personalized')) as { result?: Record<string, unknown>[] }
+  return (res.result ?? []).slice(0, limit).map((item) => ({
     id: item.id as number,
     name: item.name as string,
     cover: item.picUrl as string,
@@ -254,17 +254,12 @@ export interface QrCheckResult {
 }
 
 export async function checkQrStatus(key: string): Promise<QrCheckResult> {
-  const res = (await api.get('/login/qr/check', {
+  return (await api.get('/login/qr/check', {
     params: { key, timestamp: Date.now() },
-  })) as QrCheckResult & { _cookies?: string[] }
-  // Cookie may come from response body or Set-Cookie header
-  if (!res.cookie && res._cookies) {
-    res.cookie = res._cookies.join('; ')
-  }
-  return res
+  })) as QrCheckResult
 }
 
-export async function getUserAccount(_cookie: string): Promise<UserProfile | null> {
+export async function getUserAccount(): Promise<UserProfile | null> {
   try {
     const res = (await api.get('/user/account', {
       params: { timestamp: Date.now() },
@@ -272,7 +267,6 @@ export async function getUserAccount(_cookie: string): Promise<UserProfile | nul
       account: { vipType: number } | null
       profile: { userId: number; nickname: string; avatarUrl: string } | null
     }
-    console.log('[API] getUserAccount raw response:', res)
     if (!res.profile) return null
     return {
       userId: res.profile.userId,
@@ -319,18 +313,19 @@ export async function getPlaylistTracks(
 ): Promise<{ songs: Song[]; hasMore: boolean }> {
   const res = (await api.get('/playlist/track/all', {
     params: { id, limit, offset, timestamp: Date.now() },
-  })) as { songs: RawTrack[] }
+  })) as { songs?: RawTrack[] }
+  const songs = res.songs ?? []
   return {
-    songs: res.songs.map(transformTrack),
-    hasMore: res.songs.length === limit,
+    songs: songs.map(transformTrack),
+    hasMore: songs.length === limit,
   }
 }
 
 export async function getUserPlaylists(uid: number): Promise<Playlist[]> {
   const res = (await api.get('/user/playlist', {
     params: { uid, timestamp: Date.now() },
-  })) as { playlist: Record<string, unknown>[] }
-  return res.playlist.map((pl) => {
+  })) as { playlist?: Record<string, unknown>[] }
+  return (res.playlist ?? []).map((pl) => {
     const creator = pl.creator as Record<string, unknown> | undefined
     return {
       id: pl.id as number,

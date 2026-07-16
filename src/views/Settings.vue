@@ -19,9 +19,15 @@ const apiBaseInput = ref(settings.apiBase)
 const isEditingApi = ref(false)
 const checkingUpdate = ref(false)
 
-function saveApiBase() {
-  settings.setApiBase(apiBaseInput.value.trim())
-  isEditingApi.value = false
+async function saveApiBase() {
+  try {
+    await settings.setApiBase(apiBaseInput.value)
+    apiBaseInput.value = settings.apiBase
+    isEditingApi.value = false
+    toast.showToast('API 地址已生效')
+  } catch (error) {
+    toast.showToast(error instanceof Error ? error.message : 'API 地址无效')
+  }
 }
 
 async function selectFolder() {
@@ -53,7 +59,7 @@ function clearCache() {
     </h1>
 
     <!-- API Path -->
-    <section class="bg-card rounded-xl border border-border p-5 space-y-3">
+    <section v-if="isElectron" class="bg-card rounded-xl border border-border p-5 space-y-3">
       <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">API 路径</h2>
       <div class="flex items-center gap-2">
         <input
@@ -75,7 +81,7 @@ function clearCache() {
         </button>
       </div>
       <p class="text-xs text-muted-foreground">
-        留空使用默认地址。修改后需重启应用生效。
+        留空使用构建时的默认地址，保存后立即生效。
       </p>
     </section>
 

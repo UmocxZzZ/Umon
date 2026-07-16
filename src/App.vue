@@ -7,7 +7,6 @@ import FullScreenPlayer from '@/components/layout/FullScreenPlayer.vue'
 import PlaylistDrawer from '@/components/layout/PlaylistDrawer.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useLikesStore } from '@/stores/likes'
-import { getUserAccount } from '@/lib/api'
 import { useToast } from '@/composables/useToast'
 import { useMediaSession } from '@/composables/useMediaSession'
 
@@ -18,19 +17,11 @@ const toast = useToast()
 useMediaSession()
 
 onMounted(async () => {
-  if (auth.cookie) {
-    // Restore cookie for Electron webRequest header injection
-    if (window.electronAPI?.setCookie) {
-      await window.electronAPI.setCookie(auth.cookie)
-    }
-    try {
-      const profile = await getUserAccount(auth.cookie)
-      if (profile) {
-        auth.setProfile(profile)
-      }
-    } catch {
-      // Network error — keep cookie, don't destroy login on transient failures
-    }
+  // Restore and verify only after the environment-specific session is ready.
+  try {
+    await auth.restoreSession()
+  } catch (e) {
+    console.error('[Auth] session restore failed:', e)
   }
 })
 

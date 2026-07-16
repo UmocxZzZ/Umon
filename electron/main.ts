@@ -7,32 +7,6 @@ import https from 'node:https'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// Load .env file manually for Electron main process
-function loadEnvFile() {
-  try {
-    const envPath = path.join(__dirname, '..', '.env')
-    if (fs.existsSync(envPath)) {
-      const content = fs.readFileSync(envPath, 'utf-8')
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('#')) continue
-        const eqIndex = trimmed.indexOf('=')
-        if (eqIndex > 0) {
-          const key = trimmed.slice(0, eqIndex).trim()
-          const value = trimmed.slice(eqIndex + 1).trim()
-          if (!process.env[key]) {
-            process.env[key] = value
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.error('[Main] Failed to load .env:', e)
-  }
-}
-
-loadEnvFile()
-
 let mainWindow: BrowserWindow | null = null
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
@@ -85,6 +59,13 @@ function createWindow() {
   if (VITE_DEV_SERVER_URL) {
     mainWindow.webContents.openDevTools()
   }
+
+  // F12 toggle DevTools (works in both dev and production)
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.key === 'F12' && input.type === 'keyDown') {
+      mainWindow?.webContents.toggleDevTools()
+    }
+  })
 }
 
 // IPC: Window controls
@@ -349,17 +330,28 @@ ipcMain.handle('check-update', async () => {
   }
 })
 
-// IPC: Cookie management — inject via webRequest to bypass file:// origin restrictions
-const API_BASE = process.env.VITE_API_BASE || 'http://localhost:3000'
-let storedCookie = ''
+// Auth session: renderer configures one API scope, main process owns injection.
+let authCookie = ''
+let authScope: { origin: string; pathPrefix: string } | null = null
 
 // Filter cookie string to only include name=value pairs (strip attributes)
-const KNOWN_ATTRS = new Set(['max-age', 'expires', 'path', 'domain', 'secure', 'httponly', 'samesite'])
+const KNOWN_ATTRS = new Set([
+  'domain',
+  'expires',
+  'httponly',
+  'max-age',
+  'partitioned',
+  'path',
+  'priority',
+  'samesite',
+  'secure',
+])
 
 function cleanCookieString(raw: string): string {
   if (!raw) return ''
   return raw
     .split(/;\s*/)
+    .map((segment) => segment.trim())
     .filter((seg) => {
       const eq = seg.indexOf('=')
       if (eq < 1) return false
@@ -369,33 +361,80 @@ function cleanCookieString(raw: string): string {
     .join('; ')
 }
 
-// Inject stored cookie into all requests to the API server
+function createAuthScope(apiBase: string): { origin: string; pathPrefix: string } {
+  const url = new URL(apiBase)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('API base must use HTTP or HTTPS')
+  }
+  return {
+    origin: url.origin,
+    pathPrefix: url.pathname.replace(/\/+$/, '') || '/',
+  }
+}
+
+function isAuthRequest(requestUrl: string): boolean {
+  if (!authScope) return false
+  try {
+    const url = new URL(requestUrl)
+    if (url.origin !== authScope.origin) return false
+    return authScope.pathPrefix === '/'
+      || url.pathname === authScope.pathPrefix
+      || url.pathname.startsWith(`${authScope.pathPrefix}/`)
+  } catch {
+    return false
+  }
+}
+
+function deleteHeader(headers: Record<string, string>, name: string) {
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === name.toLowerCase()) delete headers[key]
+  }
+}
+
 function setupWebRequestFilter() {
-  console.log('[Main] Setting up webRequest filter for:', API_BASE)
   session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: [`${API_BASE}/*`] },
+    { urls: ['http://*/*', 'https://*/*'] },
     (details, callback) => {
-      if (storedCookie) {
-        details.requestHeaders['Cookie'] = storedCookie
+      // Never forward the renderer-only bridge header to arbitrary hosts.
+      deleteHeader(details.requestHeaders, 'X-Umon-Cookie')
+
+      if (isAuthRequest(details.url)) {
+        // The configured in-memory session is authoritative. Removing an
+        // automatically persisted Cookie also makes logout deterministic.
+        deleteHeader(details.requestHeaders, 'Cookie')
+        if (authCookie) details.requestHeaders['Cookie'] = authCookie
       }
       callback({ requestHeaders: details.requestHeaders })
     },
   )
+
+  // MediaElementSource requires an explicit anonymous CORS response in Electron.
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: ['http://*.music.126.net/*', 'https://*.music.126.net/*'] },
+    (details, callback) => {
+      const headers = details.responseHeaders ?? {}
+      headers['Access-Control-Allow-Origin'] = ['*']
+      headers['Access-Control-Allow-Headers'] = ['*']
+      callback({ responseHeaders: headers })
+    },
+  )
 }
 
-ipcMain.handle('set-cookie', async (_event, cookieStr: string) => {
-  storedCookie = cleanCookieString(cookieStr)
-  console.log('[Main] Cookie stored, length:', storedCookie.length)
-  console.log('[Main] Cookie preview:', storedCookie.substring(0, 100) + '...')
-})
+ipcMain.handle('configure-auth-session', (
+  event,
+  data: { cookie: string; apiBase: string },
+) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) {
+    throw new Error('Auth session can only be configured by the app window')
+  }
+  if (typeof data?.cookie !== 'string' || typeof data?.apiBase !== 'string') {
+    throw new Error('Invalid auth session payload')
+  }
 
-ipcMain.handle('clear-cookies', async () => {
-  storedCookie = ''
-  await session.defaultSession.clearStorageData({ storages: ['cookies'] })
-})
-
-ipcMain.handle('get-stored-cookie', () => {
-  return storedCookie
+  const nextScope = createAuthScope(data.apiBase)
+  const nextCookie = cleanCookieString(data.cookie)
+  authScope = nextScope
+  authCookie = nextCookie
 })
 
 app.whenReady().then(() => {

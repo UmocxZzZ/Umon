@@ -20,6 +20,34 @@ server
         rewrite ^(/.*)$ https://$host$1 permanent;
     }
 
+    # ============ Audio Proxy ============
+    # Proxies allowlisted NetEase audio through the app origin. Nginx matches
+    # against the normalized URI, so the encoded target URL is decoded here.
+    location ~ ^/__audio-proxy/(https?://(?:[a-z0-9-]+\.)*music\.126\.net/.*)$ {
+        set $audio_upstream $1;
+        resolver 223.5.5.5 1.1.1.1 valid=300s ipv6=off;
+        proxy_pass $audio_upstream;
+        proxy_set_header Host $proxy_host;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # CORS headers for Web Audio API
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Headers * always;
+        add_header Access-Control-Allow-Methods 'GET, OPTIONS' always;
+
+        # Forward Content-Length for duration detection
+        proxy_pass_header Content-Length;
+        proxy_pass_header Content-Range;
+
+        proxy_read_timeout 60s;
+    }
+
+    # Reject malformed targets and prevent this endpoint becoming an open proxy.
+    location ~ ^/__audio-proxy/ { return 403; }
+
     # ============ API Reverse Proxy ============
     # Proxies /api/* to your NeteaseCloudMusicAPI instance
     # Solves mixed content (HTTPS page -> HTTP API)
@@ -34,6 +62,7 @@ server
         # Frontend sends cookie via X-Umon-Cookie header (browser forbids setting Cookie header)
         # Convert it to the real Cookie header for the API server
         proxy_set_header Cookie $http_x_umon_cookie;
+        proxy_set_header X-Umon-Cookie "";
 
         # Rewrite Set-Cookie path so browser stores cookies correctly
         proxy_cookie_path / /api/;

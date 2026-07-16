@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Loader2, RefreshCw } from 'lucide-vue-next'
-import { getQrKey, createQrCode, checkQrStatus, getUserAccount } from '@/lib/api'
+import { getQrKey, createQrCode, checkQrStatus } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -45,22 +45,19 @@ function startPolling() {
       } else if (res.code === 802) {
         statusText.value = '已扫码，请在手机上确认'
       } else if (res.code === 803) {
-        statusText.value = '登录成功！'
         stopPolling()
-        if (res.cookie) {
-          auth.setCookie(res.cookie)
-          // Small delay to ensure cookie is saved before fetching profile
-          await new Promise(resolve => setTimeout(resolve, 200))
-          try {
-            const profile = await getUserAccount(res.cookie)
-            if (profile) {
-              auth.setProfile(profile)
-            }
-          } catch {
-            // Ignore error
-          }
+        statusText.value = '正在同步登录状态...'
+        try {
+          if (!res.cookie) throw new Error('登录响应中缺少凭证')
+          await auth.completeLogin(res.cookie)
+          statusCode.value = 803
+          statusText.value = '登录成功！'
+          setTimeout(() => router.push('/discover'), 500)
+        } catch (e) {
+          statusCode.value = 800
+          statusText.value = e instanceof Error ? e.message : '登录状态同步失败，请重试'
+          console.error('[Login] session sync error:', e)
         }
-        setTimeout(() => router.push('/discover'), 800)
       } else if (res.code === 800) {
         statusText.value = '二维码已过期，请刷新'
         stopPolling()

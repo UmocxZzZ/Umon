@@ -7,32 +7,6 @@ import { fileURLToPath, URL } from 'node:url'
 import fs from 'node:fs'
 import path from 'node:path'
 
-const cookieFile = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '.debug-cookie')
-
-function debugCookiePlugin() {
-  return {
-    name: 'debug-cookie',
-    configureServer(server: import('vite').ViteDevServer) {
-      server.middlewares.use('/__debug-cookie', (req, res) => {
-        if (req.method === 'POST') {
-          let body = ''
-          req.on('data', (chunk: Buffer) => { body += chunk })
-          req.on('end', () => {
-            fs.writeFileSync(cookieFile, body, 'utf-8')
-            res.setHeader('Content-Type', 'application/json')
-            res.end(JSON.stringify({ ok: true, path: cookieFile }))
-          })
-        } else if (req.method === 'GET') {
-          const exists = fs.existsSync(cookieFile)
-          const content = exists ? fs.readFileSync(cookieFile, 'utf-8') : ''
-          res.setHeader('Content-Type', 'application/json')
-          res.end(JSON.stringify({ exists, content }))
-        }
-      })
-    },
-  }
-}
-
 // Audio proxy to bypass CORS restrictions for Web Audio API
 function audioProxyPlugin() {
   return {
@@ -47,16 +21,30 @@ function audioProxyPlugin() {
         }
         try {
           const decodedUrl = decodeURIComponent(url)
-          const response = await fetch(decodedUrl)
+          const target = new URL(decodedUrl)
+          const isAllowedProtocol = target.protocol === 'http:' || target.protocol === 'https:'
+          const isAllowedHost = target.hostname === 'music.126.net'
+            || target.hostname.endsWith('.music.126.net')
+          if (!isAllowedProtocol || !isAllowedHost) {
+            res.statusCode = 403
+            res.end('Audio host is not allowed')
+            return
+          }
+
+          const headers = new Headers()
+          if (req.headers.range) headers.set('Range', req.headers.range)
+
+          const response = await fetch(target, { headers })
           if (!response.ok) {
             res.statusCode = response.status
             res.end('Fetch failed')
             return
           }
+          res.statusCode = response.status
           // Forward headers and add CORS
           res.setHeader('Content-Type', response.headers.get('content-type') || 'audio/mpeg')
           res.setHeader('Access-Control-Allow-Origin', '*')
-          res.setHeader('Accept-Ranges', 'bytes')
+          res.setHeader('Accept-Ranges', response.headers.get('accept-ranges') || 'bytes')
           // Forward Content-Length and Content-Range for duration detection
           const contentLength = response.headers.get('content-length')
           if (contentLength) res.setHeader('Content-Length', contentLength)
@@ -96,7 +84,6 @@ export default defineConfig(({ mode }) => {
   plugins: [
     vue(),
     tailwindcss(),
-    debugCookiePlugin(),
     audioProxyPlugin(),
     ...(isElectron
       ? [
@@ -129,6 +116,17 @@ export default defineConfig(({ mode }) => {
         target: apiBase,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            const cookie = req.headers['x-umon-cookie']
+            proxyReq.removeHeader('x-umon-cookie')
+            if (typeof cookie === 'string' && cookie) {
+              proxyReq.setHeader('Cookie', cookie)
+            } else {
+              proxyReq.removeHeader('Cookie')
+            }
+          })
+        },
       },
     },
   },

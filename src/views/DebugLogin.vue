@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Loader2, RefreshCw, CheckCircle } from 'lucide-vue-next'
-import { getQrKey, createQrCode, checkQrStatus, getUserAccount } from '@/lib/api'
+import { getQrKey, createQrCode, checkQrStatus } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -10,8 +10,6 @@ const qrImg = ref('')
 const statusText = ref('加载中...')
 const statusCode = ref(0)
 const loading = ref(true)
-const saved = ref(false)
-const savedPath = ref('')
 
 let qrKey = ''
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -20,7 +18,6 @@ async function initQr() {
   loading.value = true
   statusCode.value = 0
   statusText.value = '加载中...'
-  saved.value = false
   try {
     qrKey = await getQrKey()
     qrImg.value = await createQrCode(qrKey)
@@ -49,23 +46,7 @@ function startPolling() {
         statusText.value = '登录成功！'
         stopPolling()
         if (res.cookie) {
-          auth.setCookie(res.cookie)
-          const profile = await getUserAccount(res.cookie)
-          if (profile) auth.setProfile(profile)
-          // Save to file
-          try {
-            const r = await fetch('/__debug-cookie', {
-              method: 'POST',
-              body: res.cookie,
-            })
-            const data = await r.json() as { ok: boolean; path: string }
-            if (data.ok) {
-              saved.value = true
-              savedPath.value = data.path
-            }
-          } catch (e) {
-            console.error('[DebugLogin] save cookie error:', e)
-          }
+          await auth.completeLogin(res.cookie)
         }
       } else if (res.code === 800) {
         statusText.value = '二维码已过期，请刷新'
@@ -93,7 +74,7 @@ onUnmounted(stopPolling)
     <div class="w-96 p-8 bg-card rounded-2xl border border-border shadow-sm text-center space-y-6">
       <div>
         <h1 class="text-xl font-bold">Debug Login</h1>
-        <p class="text-xs text-muted-foreground mt-1">扫码登录后 cookie 保存到项目根目录</p>
+        <p class="text-xs text-muted-foreground mt-1">使用与正式页面相同的登录会话</p>
       </div>
 
       <!-- QR Code -->
@@ -146,14 +127,6 @@ onUnmounted(stopPolling)
       >
         {{ statusText }}
       </p>
-
-      <!-- Saved info -->
-      <div v-if="saved" class="p-3 bg-green-500/10 border border-green-500/20 rounded-lg text-left">
-        <p class="text-xs text-green-600 dark:text-green-400 font-medium mb-1">
-          Cookie 已保存到：
-        </p>
-        <p class="text-xs text-muted-foreground font-mono break-all">{{ savedPath }}</p>
-      </div>
 
       <!-- User info -->
       <div v-if="auth.isLoggedIn && auth.profile" class="p-3 bg-accent rounded-lg text-left">

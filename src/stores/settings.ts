@@ -1,6 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import type { ThemeMode } from '@/types'
+import {
+  normalizeElectronApiBase,
+  syncElectronAuthSession,
+} from '@/lib/authSession'
 
 export const useSettingsStore = defineStore('settings', () => {
   const theme = ref<ThemeMode>(
@@ -25,8 +29,23 @@ export const useSettingsStore = defineStore('settings', () => {
     theme.value = t
   }
 
-  function setApiBase(url: string) {
-    apiBase.value = url
+  async function setApiBase(url: string): Promise<void> {
+    const nextValue = normalizeElectronApiBase(url)
+    const previousValue = apiBase.value
+
+    apiBase.value = nextValue
+    if (nextValue) localStorage.setItem('umon-api-base', nextValue)
+    else localStorage.removeItem('umon-api-base')
+
+    try {
+      await syncElectronAuthSession()
+    } catch (error) {
+      apiBase.value = previousValue
+      if (previousValue) localStorage.setItem('umon-api-base', previousValue)
+      else localStorage.removeItem('umon-api-base')
+      await syncElectronAuthSession()
+      throw error
+    }
   }
 
   function setDownloadDir(path: string) {
@@ -37,10 +56,6 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem('umon-theme', val)
     document.documentElement.classList.toggle('dark', val === 'dark')
   }, { immediate: true })
-
-  watch(apiBase, (val) => {
-    localStorage.setItem('umon-api-base', val)
-  })
 
   watch(downloadDir, (val) => {
     localStorage.setItem('umon-download-dir', val)

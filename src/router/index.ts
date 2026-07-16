@@ -46,13 +46,9 @@ const router = createRouter({
     },
     {
       path: '/login',
+      alias: '/debug-login',
       name: 'Login',
       component: () => import('@/views/Login.vue'),
-    },
-    {
-      path: '/debug-login',
-      name: 'DebugLogin',
-      component: () => import('@/views/DebugLogin.vue'),
     },
     {
       path: '/downloads',

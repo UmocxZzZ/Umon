@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { createMapShaderMaterial, type RippleData } from './shaderMaterial'
 import { useAudioVisualizer } from '@/composables/useAudioVisualizer'
 import { usePlayerStore } from '@/stores/player'
+import { useSettingsStore } from '@/stores/settings'
 
 const props = defineProps<{
   active: boolean
@@ -11,7 +12,8 @@ const props = defineProps<{
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const player = usePlayerStore()
-const { init: initAudio, resume, getAudioData } = useAudioVisualizer()
+const settings = useSettingsStore()
+const { getAudioData } = useAudioVisualizer()
 
 // Three.js objects (shallowRef to avoid reactivity overhead)
 const renderer = shallowRef<THREE.WebGLRenderer | null>(null)
@@ -49,12 +51,9 @@ function addRipple(x: number, y: number, strength: number, isWhite = false) {
 let lastRippleTime = 0
 
 function getThemeBgColor(): number {
-  const style = getComputedStyle(document.documentElement)
-  const bg = style.getPropertyValue('--color-background').trim()
-  if (bg.startsWith('#')) {
-    return parseInt(bg.slice(1), 16)
-  }
-  return 0x0a0a0a
+  // Use settings store to detect theme
+  const isDark = settings.theme === 'dark'
+  return isDark ? 0x0a0a0a : 0xffffff
 }
 
 function setupScene(canvas: HTMLCanvasElement) {
@@ -135,8 +134,6 @@ function setupScene(canvas: HTMLCanvasElement) {
     mat.uniforms.uTime.value = now
 
     if (props.active) {
-      resume()
-
       const data = getAudioData(player.isPlaying)
 
       mat.uniforms.uBass.value = data.bass
@@ -188,52 +185,9 @@ function handleClick(e: MouseEvent) {
   addRipple(x * 40, y * 40, 1.5)
 }
 
-// Reconnect visualizer when audio element switches
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let pendingCanplay: (() => void) | null = null
-
-player.setOnAudioSwitch((newAudio) => {
-  // Cancel any pending reconnection
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
-  if (pendingCanplay && connectedAudio) {
-    connectedAudio.removeEventListener('canplay', pendingCanplay)
-    pendingCanplay = null
-  }
-
-  const connect = () => {
-    initAudio(newAudio, true)
-  }
-
-  if (newAudio.readyState >= 2) {
-    connect()
-  } else {
-    pendingCanplay = () => {
-      newAudio.removeEventListener('canplay', pendingCanplay!)
-      pendingCanplay = null
-      connect()
-    }
-    connectedAudio = newAudio
-    newAudio.addEventListener('canplay', pendingCanplay)
-    // Fallback
-    reconnectTimer = setTimeout(() => {
-      if (pendingCanplay) {
-        newAudio.removeEventListener('canplay', pendingCanplay)
-        pendingCanplay = null
-      }
-      connect()
-    }, 500)
-  }
-})
-
-let connectedAudio: HTMLAudioElement | null = null
-
 onMounted(() => {
   if (canvasRef.value) {
     setupScene(canvasRef.value)
-    initAudio(player.audio)
   }
 })
 
