@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { Settings, AudioLines, HardDrive, Info, ExternalLink, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
+import { Settings, AudioLines, HardDrive, Info, ExternalLink, RefreshCw, Trash2, Speaker, ListRestart } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import { usePlaylistCacheStore } from '@/stores/playlistCache'
 import { useToast } from '@/composables/useToast'
 import { AUDIO_QUALITY_OPTIONS } from '@/lib/audioQuality'
+import { supportsAudioOutputDeviceSelection } from '@/lib/audioEngine'
 import type { AudioQuality } from '@/types'
 import logoUrl from '@/assets/logo.png'
 
@@ -20,6 +21,19 @@ const isElectron = computed(() => !!window.electronAPI)
 const apiBaseInput = ref(settings.apiBase)
 const isEditingApi = ref(false)
 const checkingUpdate = ref(false)
+const audioOutputDevices = ref<Array<{ deviceId: string; label: string }>>([])
+const isRefreshingAudioOutputs = ref(false)
+const isSelectingAudioOutput = ref(false)
+const audioOutputError = ref('')
+const canSelectAudioOutput = computed(() => {
+  return isElectron.value
+    && supportsAudioOutputDeviceSelection()
+    && typeof navigator.mediaDevices?.enumerateDevices === 'function'
+})
+
+type AudioOutputMediaDevices = MediaDevices & {
+  selectAudioOutput?: () => Promise<MediaDeviceInfo>
+}
 
 async function saveApiBase() {
   try {
@@ -41,7 +55,20 @@ async function selectFolder() {
 async function checkUpdate() {
   checkingUpdate.value = true
   try {
-    await window.electronAPI?.checkUpdate?.()
+    const result = await window.electronAPI?.checkUpdate?.()
+    if (!result) return
+
+    if (result.status === 'update-available') {
+      toast.showToast(`发现新版本 v${result.latestVersion}，正在打开下载页面`)
+    } else if (result.status === 'up-to-date') {
+      toast.showToast(`当前 v${result.currentVersion} 已是最新版本`)
+    } else if (result.status === 'no-release') {
+      toast.showToast('GitHub 暂无已发布的正式版本')
+    } else {
+      toast.showToast(result.error ? `检查更新失败：${result.error}` : '检查更新失败')
+    }
+  } catch (error) {
+    toast.showToast(error instanceof Error ? `检查更新失败：${error.message}` : '检查更新失败')
   } finally {
     setTimeout(() => { checkingUpdate.value = false }, 1500)
   }
@@ -57,6 +84,117 @@ function selectPlaybackQuality(quality: AudioQuality) {
   settings.setPlaybackQuality(quality)
   toast.showToast('在线播放音质已切换')
 }
+async function refreshAudioOutputs() {
+  if (!canSelectAudioOutput.value) return
+  isRefreshingAudioOutputs.value = true
+  audioOutputError.value = ''
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    const seenDeviceIds = new Set<string>()
+    const outputs = devices
+      .filter((device) => device.kind === 'audiooutput' && device.deviceId !== 'default')
+      .filter((device) => {
+        if (!device.deviceId || seenDeviceIds.has(device.deviceId)) return false
+        seenDeviceIds.add(device.deviceId)
+        return true
+      })
+      .map((device, index) => ({
+        deviceId: device.deviceId,
+        label: device.label || `音频输出设备 ${index + 1}`,
+      }))
+
+    audioOutputDevices.value = [
+      { deviceId: '', label: '系统默认输出' },
+      ...outputs,
+    ]
+
+    if (
+      settings.audioOutputDeviceId
+      && !audioOutputDevices.value.some((device) => device.deviceId === settings.audioOutputDeviceId)
+    ) {
+      audioOutputDevices.value.push({
+        deviceId: settings.audioOutputDeviceId,
+        label: '已断开或未获授权的输出设备',
+      })
+    }
+  } catch (error) {
+    audioOutputError.value = error instanceof Error ? error.message : '无法读取音频输出设备'
+  } finally {
+    isRefreshingAudioOutputs.value = false
+  }
+}
+
+async function selectAudioOutput(deviceId: string) {
+  if (deviceId === settings.audioOutputDeviceId) return
+  audioOutputError.value = ''
+  try {
+    await settings.setAudioOutputDevice(deviceId)
+    toast.showToast(deviceId ? '音频输出设备已切换' : '已改为跟随系统默认输出')
+  } catch (error) {
+    audioOutputError.value = error instanceof Error ? error.message : '切换音频输出设备失败'
+    await refreshAudioOutputs()
+  }
+}
+
+function handleAudioOutputChange(event: Event) {
+  const select = event.target
+  if (!(select instanceof HTMLSelectElement)) return
+  void selectAudioOutput(select.value)
+}
+
+async function openSystemAudioOutputPicker() {
+  const mediaDevices = navigator.mediaDevices as AudioOutputMediaDevices
+  if (typeof mediaDevices.selectAudioOutput !== 'function') {
+    audioOutputError.value = '当前 Electron 运行环境无法打开系统输出设备选择器'
+    return
+  }
+
+  isSelectingAudioOutput.value = true
+  audioOutputError.value = ''
+  try {
+    const device = await mediaDevices.selectAudioOutput()
+    await selectAudioOutput(device.deviceId)
+    await refreshAudioOutputs()
+  } catch (error) {
+    // AbortError is the normal result when the user dismisses the system picker.
+    if (error instanceof DOMException && error.name === 'AbortError') return
+    audioOutputError.value = error instanceof Error ? error.message : '无法选择音频输出设备'
+  } finally {
+    isSelectingAudioOutput.value = false
+  }
+}
+
+async function revealAllAudioOutputs() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    audioOutputError.value = '当前环境无法请求完整设备列表'
+    return
+  }
+
+  audioOutputError.value = ''
+  try {
+    // Chromium only exposes all output devices after an input permission grant.
+    // Stop immediately: Umon never records microphone audio.
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    stream.getTracks().forEach((track) => track.stop())
+    await refreshAudioOutputs()
+  } catch (error) {
+    audioOutputError.value = error instanceof Error ? error.message : '未获得读取完整设备列表的权限'
+  }
+}
+
+function handleAudioDeviceChange() {
+  void refreshAudioOutputs()
+}
+
+onMounted(() => {
+  if (!canSelectAudioOutput.value) return
+  void refreshAudioOutputs()
+  navigator.mediaDevices.addEventListener('devicechange', handleAudioDeviceChange)
+})
+
+onBeforeUnmount(() => {
+  navigator.mediaDevices?.removeEventListener('devicechange', handleAudioDeviceChange)
+})
 </script>
 
 <template>
@@ -90,6 +228,67 @@ function selectPlaybackQuality(quality: AudioQuality) {
       </div>
       <p class="text-xs text-muted-foreground">
         留空使用构建时的默认地址，保存后立即生效。
+      </p>
+    </section>
+
+    <!-- Audio output device (Electron) -->
+    <section v-if="isElectron" class="bg-card rounded-xl border border-border p-5 space-y-3">
+      <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+        <Speaker :size="14" />
+        音频输出设备
+      </h2>
+      <template v-if="canSelectAudioOutput">
+        <div class="flex flex-col gap-2 sm:flex-row">
+          <select
+            :value="settings.audioOutputDeviceId"
+            :disabled="isRefreshingAudioOutputs || isSelectingAudioOutput"
+            class="min-w-0 flex-1 h-9 px-3 rounded-lg bg-muted text-sm outline-none
+                   focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60"
+            @change="handleAudioOutputChange"
+          >
+            <option
+              v-for="device in audioOutputDevices"
+              :key="device.deviceId"
+              :value="device.deviceId"
+            >
+              {{ device.label }}
+            </option>
+          </select>
+          <button
+            class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-muted text-sm
+                   hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 transition-colors"
+            :disabled="isRefreshingAudioOutputs || isSelectingAudioOutput"
+            @click="openSystemAudioOutputPicker"
+          >
+            <Speaker :size="14" />
+            {{ isSelectingAudioOutput ? '选择中...' : '系统选择' }}
+          </button>
+          <button
+            class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-muted text-sm
+                   hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 transition-colors"
+            :disabled="isRefreshingAudioOutputs || isSelectingAudioOutput"
+            @click="refreshAudioOutputs"
+          >
+            <ListRestart :size="14" :class="{ 'animate-spin': isRefreshingAudioOutputs }" />
+            刷新
+          </button>
+        </div>
+        <p class="text-xs text-muted-foreground">
+          切换会立刻作用于当前歌曲和无缝播放。若列表只显示默认设备，可点击“系统选择”或授权显示完整设备列表。
+        </p>
+        <button
+          class="text-xs text-muted-foreground hover:text-primary transition-colors"
+          :disabled="isRefreshingAudioOutputs || isSelectingAudioOutput"
+          @click="revealAllAudioOutputs"
+        >
+          授权显示完整设备列表（不会录音）
+        </button>
+        <p v-if="audioOutputError" class="text-xs text-destructive">
+          {{ audioOutputError }}
+        </p>
+      </template>
+      <p v-else class="text-xs text-muted-foreground">
+        当前 Electron 运行环境不支持音频输出设备切换。
       </p>
     </section>
 

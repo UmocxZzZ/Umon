@@ -11,6 +11,87 @@ let mainWindow: BrowserWindow | null = null
 
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 
+interface ParsedVersion {
+  major: number
+  minor: number
+  patch: number
+  prerelease: string[]
+}
+
+function parseVersion(raw: string): ParsedVersion | null {
+  const normalized = raw.trim().replace(/^[vV]/, '')
+  const match = normalized.match(
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
+  )
+  if (!match) return null
+
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ? match[4].split('.') : [],
+  }
+}
+
+function comparePrerelease(left: string[], right: string[]): number {
+  if (left.length === 0 && right.length === 0) return 0
+  if (left.length === 0) return 1
+  if (right.length === 0) return -1
+
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = left[index]
+    const rightPart = right[index]
+    if (leftPart == null) return -1
+    if (rightPart == null) return 1
+    if (leftPart === rightPart) continue
+
+    const leftNumber = /^\d+$/.test(leftPart) ? Number(leftPart) : null
+    const rightNumber = /^\d+$/.test(rightPart) ? Number(rightPart) : null
+    if (leftNumber != null && rightNumber != null) return leftNumber - rightNumber
+    if (leftNumber != null) return -1
+    if (rightNumber != null) return 1
+    return leftPart.localeCompare(rightPart)
+  }
+  return 0
+}
+
+function isNewerVersion(candidate: string, current: string): boolean {
+  const next = parseVersion(candidate)
+  const installed = parseVersion(current)
+  if (!next || !installed) return false
+
+  for (const key of ['major', 'minor', 'patch'] as const) {
+    if (next[key] !== installed[key]) return next[key] > installed[key]
+  }
+  return comparePrerelease(next.prerelease, installed.prerelease) > 0
+}
+
+function isApplicationUrl(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl)
+    if (VITE_DEV_SERVER_URL) {
+      return url.origin === new URL(VITE_DEV_SERVER_URL).origin
+    }
+    return url.protocol === 'file:'
+  } catch {
+    return false
+  }
+}
+
+function openExternalUrl(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    void shell.openExternal(url.toString()).catch((error) => {
+      console.warn('[ExternalLink] Failed to open URL:', error)
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function createWindow() {
   const preloadPath = VITE_DEV_SERVER_URL
     ? path.join(__dirname, '..', 'electron', 'preload.cjs')
@@ -30,6 +111,20 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  })
+
+  // Keep application navigation inside Electron, but hand every web link to
+  // the user's Windows default browser. Deny the Chromium child window either
+  // way so target="_blank" never creates an unmanaged Electron window.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (!isApplicationUrl(url)) openExternalUrl(url)
+    return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isApplicationUrl(url)) return
+    event.preventDefault()
+    openExternalUrl(url)
   })
 
   if (VITE_DEV_SERVER_URL) {
@@ -317,16 +412,40 @@ ipcMain.handle('check-update', async () => {
   const currentVersion = app.getVersion()
   try {
     const res = await fetch('https://api.github.com/repos/UmocxZzZ/Umon/releases/latest')
-    if (!res.ok) return { hasUpdate: false, currentVersion }
-    const data = await res.json() as { tag_name?: string; html_url?: string }
-    const latest = (data.tag_name ?? '').replace(/^v/, '')
-    if (latest && latest !== currentVersion) {
-      shell.openExternal(data.html_url ?? 'https://github.com/UmocxZzZ/Umon/releases')
-      return { hasUpdate: true, latestVersion: latest, currentVersion }
+    if (res.status === 404) {
+      return { status: 'no-release', hasUpdate: false, currentVersion }
     }
-    return { hasUpdate: false, currentVersion }
-  } catch {
-    return { hasUpdate: false, currentVersion }
+    if (!res.ok) {
+      return {
+        status: 'error',
+        hasUpdate: false,
+        currentVersion,
+        error: `GitHub API HTTP ${res.status}`,
+      }
+    }
+    const data = await res.json() as { tag_name?: string; html_url?: string }
+    const latest = (data.tag_name ?? '').trim().replace(/^[vV]/, '')
+    if (!parseVersion(latest)) {
+      return {
+        status: 'error',
+        hasUpdate: false,
+        currentVersion,
+        error: 'Release tag is not a semantic version',
+      }
+    }
+    if (isNewerVersion(latest, currentVersion)) {
+      const releaseUrl = data.html_url ?? 'https://github.com/UmocxZzZ/Umon/releases/latest'
+      await shell.openExternal(releaseUrl)
+      return { status: 'update-available', hasUpdate: true, latestVersion: latest, currentVersion }
+    }
+    return { status: 'up-to-date', hasUpdate: false, latestVersion: latest, currentVersion }
+  } catch (error) {
+    return {
+      status: 'error',
+      hasUpdate: false,
+      currentVersion,
+      error: error instanceof Error ? error.message : 'Unknown update error',
+    }
   }
 })
 

@@ -857,6 +857,7 @@ export const usePlayerStore = defineStore('player', () => {
 
   attachMediaElement(audio)
   setAudioOutputVolume(volume.value, true)
+  void settings.restoreAudioOutputDevice()
   watch(
     () => settings.playbackQuality,
     () => {

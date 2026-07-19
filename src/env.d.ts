@@ -22,7 +22,13 @@ interface Window {
     openFolder: (filePath: string) => void
     selectFolder: () => Promise<string | null>
     getDownloadPath: () => Promise<string>
-    checkUpdate: () => Promise<{ hasUpdate: boolean; latestVersion?: string; currentVersion: string }>
+    checkUpdate: () => Promise<{
+      status: 'update-available' | 'up-to-date' | 'no-release' | 'error'
+      hasUpdate: boolean
+      latestVersion?: string
+      currentVersion: string
+      error?: string
+    }>
     configureAuthSession: (data: { cookie: string; apiBase: string }) => Promise<void>
   }
 }

@@ -9,16 +9,24 @@ interface AudioGraph {
   output: GainNode
 }
 
+type SinkAwareAudioContext = AudioContext & {
+  setSinkId?: (sinkId: string) => Promise<void>
+  sinkId?: string
+}
+
 let graph: AudioGraph | null = null
 let spectrumBuffer = new Uint8Array(0)
 let outputVolume = 0.7
 
 const mediaSources = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>()
 
-function createAudioContext(): AudioContext {
-  const AudioContextClass = window.AudioContext
+function getAudioContextClass(): typeof AudioContext {
+  return window.AudioContext
     || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-  return new AudioContextClass({ latencyHint: 'playback' })
+}
+
+function createAudioContext(): AudioContext {
+  return new (getAudioContextClass())({ latencyHint: 'playback' })
 }
 
 function ensureGraph(): AudioGraph {
@@ -98,6 +106,30 @@ export function setAudioOutputVolume(value: number, immediate = false): void {
   } else {
     graph.output.gain.setTargetAtTime(outputVolume, now, 0.015)
   }
+}
+
+/**
+ * The player routes both streamed media and gapless AudioBuffer sources through
+ * one AudioContext. Switching the context sink keeps those two paths on the
+ * same output device, which a media-element-only setSinkId call cannot do.
+ */
+export function supportsAudioOutputDeviceSelection(): boolean {
+  const AudioContextClass = getAudioContextClass()
+  return typeof (AudioContextClass.prototype as SinkAwareAudioContext).setSinkId === 'function'
+}
+
+/**
+ * Uses an empty sink id to follow Windows' current default output device.
+ * Non-empty ids must come from navigator.mediaDevices.enumerateDevices() or
+ * navigator.mediaDevices.selectAudioOutput().
+ */
+export async function setAudioOutputDevice(deviceId: string): Promise<void> {
+  const { context } = ensureGraph()
+  const sinkContext = context as SinkAwareAudioContext
+  if (typeof sinkContext.setSinkId !== 'function') {
+    throw new Error('当前 Electron 运行环境不支持切换音频输出设备')
+  }
+  await sinkContext.setSinkId(deviceId)
 }
 
 /**
